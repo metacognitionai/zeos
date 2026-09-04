@@ -1,0 +1,68 @@
+# The two pipes the agents hand the baton across.
+#
+# Ring and principal are assigned here, by the kernel, from provenance -- never
+# claimed by the content that arrives (MP §4). Both ends of this pair are ordinary
+# peer jobs at ring 2, so what arrives on them is trusted exactly as far as a peer
+# job is, and no further.
+#
+# `capacity` is small on purpose. A pipe is a bounded buffer, and a bounded buffer
+# that blocks its writer is what gives producers and consumers of different speeds
+# automatic rate matching with no logic in either descriptor. Sixty-four tokens is
+# far more than a number needs and still small enough that backpressure is a real
+# mechanism here rather than a theoretical one.
+
+- name: count.a2b
+  ring: TRUSTED
+  principal: peer_job
+  capacity: 64
+
+- name: count.b2a
+  ring: TRUSTED
+  principal: peer_job
+  capacity: 64
+
+# The actuators. A write here is not a message to anyone -- it changes world state,
+# and the kernel pushes the new value back into every job that maps it as a status
+# region. That is where these two agents keep what they must not lose: a status
+# region carries Perm.W, and the eviction planner refuses to evict those, so it
+# survives any amount of paging pressure. Everything else in a context is the
+# pager's to take.
+#
+# One actuator each, so no two descriptors write the same object.
+#
+# `capacity` here is not a countdown, unlike on the pipes above. An actuator's buffer
+# holds the current value rather than a history, so it can never fill and never applies
+# backpressure: nobody is waiting to receive an effect.
+
+- name: count.progress_a
+  ring: TRUSTED
+  principal: device
+  world_object: count.a
+  capacity: 32
+
+- name: count.progress_b
+  ring: TRUSTED
+  principal: device
+  world_object: count.b
+  capacity: 32
+
+# The console. Two device pipes, written by the driver's keyboard adapter rather
+# than by any job -- "device drivers are adapters that turn external events into
+# pipe writes" (core §4.3), and a keyboard is the plainest device there is.
+#
+# `keys.interrupt` is bound to a vector, so a write to it is an interrupt: the
+# kernel spawns the handler at the vector's priority and it preempts whatever is
+# running. `keys.number` is ordinary dataflow -- the handler blocks on it, which
+# is how a handler waits for a human without anybody polling.
+
+- name: keys.interrupt
+  ring: TRUSTED
+  principal: user
+  device: true
+  capacity: 8
+
+- name: keys.number
+  ring: TRUSTED
+  principal: user
+  device: true
+  capacity: 16

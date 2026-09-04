@@ -1,0 +1,15 @@
+# Both agents start at boot. Neither is a vector handler and neither is a child, so the
+# loader would infer this list anyway -- it is written out because the order decides which
+# job counts first, and that is worth being explicit about.
+#
+# Equal-priority jobs dispatch FIFO by spawn order, and ZEOS does not timeslice between
+# them: whoever is dispatched first holds the machine until it blocks. So the first name
+# here does not merely start first, it runs an entire turn -- ten `say`s and a handover --
+# before anything else is dispatched.
+#
+# counter-b does not race it, because counter-b is `pinned: true`: it boots resident and
+# prefilled but not runnable, and joins the ready set only when counter-a's `go` arrives
+# on the pipe it declared. counter-a is deliberately not pinned. Something has to go
+# first, and a case where every job waits to be addressed never starts.
+- counter-a
+- counter-b

@@ -1,0 +1,19 @@
+# What a suspended job is told changed under it: `dirty_for` diffs a job's
+# `reads:` against the writes that landed while it was away, so an object belongs
+# here only if something else can change it while the job is suspended, the
+# change would make it choose differently, and it fits on one line. Monster
+# positions fail the last two: ten rows every march would make every resume
+# dirty, which is the same as making none of them dirty.
+initial:
+  # The object the reflex moves, so the one that changes because of the interruption.
+  ship.column: "4"
+  # Changes with time rather than with the interruption, so it shows up only
+  # after a long suspension, which is exactly when a plan needs revalidating.
+  block.front_row: "0"
+  # Firing while it is costs the turn, so a plan ending in `shoot` is invalidated
+  # by this flipping.
+  missile.in_flight: "no"
+
+  # The stick's readback, declared only so `game.controls` latches: not a fact
+  # about the world, and no job may put it in `reads:`.
+  game.action: shoot

@@ -1,0 +1,10 @@
+# The interrupt vector table. `deadline` is the safety budget that drives
+# placement once there is a link to compare it against (ZEOS-Distributed §3.1).
+
+- vector: threshold-alarm
+  source: sensors.threshold
+  handler: threshold-alarm
+  priority: 5
+  policy: coalesce
+  deadline: 40ms
+  min_interval: 100ms

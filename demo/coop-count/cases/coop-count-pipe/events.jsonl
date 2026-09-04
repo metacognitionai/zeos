@@ -1,0 +1,5 @@
+# A keypress and a typed number, without a keyboard. `--events` is the same
+# device-adapter path the console uses -- Kernel.deliver either way -- so this is
+# the interrupt, reproducibly, for anyone without a terminal to press space at.
+{"at_ns": 120000000, "pipe": "keys.interrupt", "text": "attention"}
+{"at_ns": 130000000, "pipe": "keys.number", "text": "500"}

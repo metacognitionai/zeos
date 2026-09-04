@@ -1,0 +1,8 @@
+# How far each agent has counted. Seeded so the objects exist from the start.
+#
+# This is the whole memory of the system. In `cases/coop-count-pipe/` the world store is what
+# survives eviction; here it is what survives the job itself, because every turn is a
+# fresh job with an empty transcript.
+initial:
+  count.a: "0"
+  count.b: "0"

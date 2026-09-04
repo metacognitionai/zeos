@@ -1,0 +1,611 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Copyright (C) 2026 Metacognition AI
+ *
+ * This source code is licensed under the AGPL-3.0-only licence found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+/* One palette, used everywhere. Job state has exactly one colour, and it is the
+ * same colour in the diagram, in the timeline and in the table -- a debugger whose
+ * "blocked" is one shade in one pane and another shade in the next is a debugger
+ * you have to translate while reading. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f6f4;
+  --panel: #ffffff;
+  --ink: #1b1b1a;
+  --dim: #6d6d68;
+  --line: #d8d8d2;
+  --accent: #2f6f9f;
+
+  /* Job states. */
+  --running: #2f9f6f;
+  --ready: #8ab4d8;
+  --blocked: #c8952f;
+  --suspended: #9a6fc0;
+  --pinned-idle: #7f9aa8;
+  --done: #a8a8a2;
+  --faulted: #c0492f;
+
+  /* Content rings, 0 kernel to 3 external. */
+  --ring0: #6f5fa8;
+  --ring1: #2f6f9f;
+  --ring2: #2f9f6f;
+  --ring3: #c8752f;
+
+  --node-w: 196px;
+  /* Layout of the two columns and the seam between them. ``--side-w`` is rewritten by
+     the divider; ``--divider-w`` is the seam's own width and is not adjustable. */
+  --side-w: 340px;
+  --divider-w: 6px;
+  --node-h: 76px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16171a;
+    --panel: #1e2024;
+    --ink: #e6e6e2;
+    --dim: #93938c;
+    --line: #33353b;
+    --accent: #6faede;
+    --ready: #4f7fae;
+    --done: #55565c;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #16171a;
+  --panel: #1e2024;
+  --ink: #e6e6e2;
+  --dim: #93938c;
+  --line: #33353b;
+  --accent: #6faede;
+  --ready: #4f7fae;
+  --done: #55565c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+code, .mono, table, .ticker, .at { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; }
+
+/* --- header --------------------------------------------------------------- */
+
+#top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+#top h1 { font-size: 15px; margin: 0; font-weight: 600; }
+.sub { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
+.titles { min-width: 0; }
+.badges { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+
+.badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.badge b { color: var(--ink); font-weight: 600; }
+.badge.error { border-color: var(--faulted); color: var(--faulted); }
+.badge.warning { border-color: var(--blocked); color: var(--blocked); }
+
+/* A badge that is also a switch. On looks like an ordinary badge with an accent
+ * border, so the three that can be clicked read as a group; off is muted and dashed,
+ * which says the count is still true but those edges are not being drawn. */
+button.badge {
+  font: inherit;
+  font-size: 11px;
+  background: none;
+  cursor: pointer;
+}
+button.badge[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button.badge[aria-pressed="false"] { border-style: dashed; opacity: 0.5; }
+button.badge[aria-pressed="false"] b { color: var(--dim); }
+button.badge:hover:not(:disabled) { border-color: var(--accent); }
+button.badge:disabled { opacity: 0.35; cursor: default; }
+.badge kbd { font: 9px ui-monospace, monospace; opacity: 0.6; margin-left: 4px; }
+
+#theme {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 3px 8px;
+}
+
+#source {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  text-decoration: none;
+}
+
+/* --- main ----------------------------------------------------------------- */
+
+main {
+  display: grid;
+  /* The side panel's width is a variable so the divider can set it without the page
+     knowing anything about layout. The default is the width the panes were designed
+     at; a reader's own choice is remembered per browser. */
+  grid-template-columns: 1fr var(--divider-w) var(--side-w);
+  min-height: 0;
+}
+
+#graph, #side { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+#side { overflow-y: auto; background: var(--panel); }
+
+/* The border that was on #side lives here now: the divider *is* the seam, and two
+   lines a pixel apart read as a mistake. */
+#divider {
+  background: var(--line);
+  cursor: col-resize;
+  /* The hit area is the whole column; 6px is thin to aim at, so the handle grows a
+     little on approach rather than being permanently heavy. */
+  transition: background 120ms;
+}
+#divider:hover,
+#divider:focus,
+#divider.dragging { background: var(--accent); outline: none; }
+
+/* While a drag is in flight the pointer owns the page: without this, crossing the
+   diagram selects its labels and the cursor flickers between arrow and resize. */
+body.resizing { user-select: none; cursor: col-resize; }
+
+.pane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 2;
+}
+.pane-head h2 {
+  font-size: 11px;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--dim);
+  font-weight: 600;
+}
+.legend {
+  font-size: 11px;
+  color: var(--dim);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/* Each strip names what it keys. The pane's heading is "wiring" and belongs to the
+   diagram, not to whichever strip is level with it -- two unlabelled rows of swatches
+   under one heading leave the reader to guess which the heading captions. */
+.key-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 9.5px;
+  opacity: 0.7;
+  align-self: center;
+}
+
+.legend i { font-style: normal; display: inline-flex; align-items: center; gap: 4px; }
+.legend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* The edge key. Its own row under the pane head rather than crowded in beside the
+   state legend: these entries carry a drawn sample each, and the two keys answer
+   different questions -- what a box is doing, and what a line between boxes means. */
+.edge-key {
+  display: flex;
+  flex-wrap: wrap;
+  /* Ends flush right, under the state legend in the pane head above: the two keys
+     read as one column of explanation rather than as two unrelated strips. */
+  justify-content: flex-end;
+  gap: 6px 14px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--dim);
+}
+.edge-key i { font-style: normal; display: inline-flex; align-items: center; gap: 5px; }
+.edge-key .sample { overflow: visible; flex: none; }
+/* ``.edge`` is sized for a diagram the reader is looking across; at legend scale the
+   heaviest states would be a blob, so the sample is capped. The dash patterns and the
+   colours -- the parts that identify an edge -- come through unchanged. */
+.edge-key .sample .edge { stroke-width: 2; }
+.edge-key .sample .edge.busy { stroke-width: 3; }
+.edge-key .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* The two keys are one block, so only the block is ruled off. The rule that normally
+   ends a pane head would otherwise run between JOBS: and EDGES: and split them. */
+#graph .pane-head { border-bottom: none; }
+
+.scroller { overflow: auto; flex: 1; padding: 14px; }
+.pane + .pane { border-top: 1px solid var(--line); }
+
+/* --- the diagram ---------------------------------------------------------- */
+
+#svg { display: block; }
+
+.band-rule { stroke: var(--line); stroke-dasharray: 3 5; }
+.band-label {
+  fill: var(--dim);
+  font: 600 10px ui-monospace, monospace;
+  letter-spacing: 0.08em;
+}
+
+.node rect.body {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1.5;
+  rx: 8;
+}
+.node .name { fill: var(--ink); font: 600 12px ui-sans-serif, system-ui, sans-serif; }
+.node .meta { fill: var(--dim); font: 10px ui-monospace, monospace; }
+.node .flag {
+  fill: var(--dim);
+  font: 600 9px ui-monospace, monospace;
+  letter-spacing: 0.06em;
+}
+.node .dot { r: 4.5; fill: var(--done); }
+
+.node.running rect.body { stroke: var(--running); stroke-width: 2.5; }
+.node.running .dot { fill: var(--running); }
+.node.ready .dot { fill: var(--ready); }
+.node.blocked .dot { fill: var(--blocked); }
+.node.blocked rect.body { stroke-dasharray: 5 4; }
+.node.suspended .dot { fill: var(--suspended); }
+.node.suspended rect.body { stroke: var(--suspended); }
+.node.pinned_idle .dot { fill: var(--pinned-idle); }
+.node.done .dot { fill: var(--done); }
+.node.faulted rect.body { stroke: var(--faulted); stroke-width: 2.5; }
+.node.faulted .dot { fill: var(--faulted); }
+.node.absent { opacity: 0.45; }
+
+.chip rect { fill: var(--panel); stroke: var(--line); rx: 5; }
+.chip text { font: 10px ui-monospace, monospace; fill: var(--ink); }
+.chip .sub { fill: var(--dim); }
+.chip.ring3 rect { stroke: var(--ring3); }
+.chip.ring2 rect { stroke: var(--ring2); }
+.chip.ring1 rect { stroke: var(--ring1); }
+.chip.ring0 rect { stroke: var(--ring0); }
+.chip.changed rect { fill: color-mix(in srgb, var(--running) 22%, var(--panel)); }
+
+.edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
+.edge.ring0 { stroke: var(--ring0); }
+.edge.ring1 { stroke: var(--ring1); }
+.edge.ring2 { stroke: var(--ring2); }
+.edge.ring3 { stroke: var(--ring3); }
+.edge.interrupt { stroke-dasharray: 6 4; stroke-width: 2; }
+/* A status region is not traffic: nothing is buffered, nothing blocks, and the job
+ * performs no read. Drawn finely dotted so it never reads as a pipe. */
+.edge.maps { stroke-dasharray: 1 4; stroke-linecap: round; opacity: 0.75; }
+
+.arrow path { fill: var(--line); }
+.arrow.ring0 path { fill: var(--ring0); }
+.arrow.ring1 path { fill: var(--ring1); }
+.arrow.ring2 path { fill: var(--ring2); }
+.arrow.ring3 path { fill: var(--ring3); }
+.edge.idle { opacity: 0.42; }
+.edge.busy { stroke-width: 3; opacity: 1; }
+.edge.blocking { stroke-dasharray: 4 4; opacity: 1; }
+.edge.flash { stroke-width: 4; }
+/* The halo is what lets a label sit on a line without either becoming unreadable:
+ * the text is stroked with the page's own background first, then filled. */
+.edge-label {
+  font: 9.5px ui-monospace, monospace;
+  fill: var(--dim);
+  stroke: var(--bg);
+  stroke-width: 3.5;
+  paint-order: stroke fill;
+}
+.edge-label.busy { fill: var(--ink); }
+.edge-label.maps { fill: var(--ring0); }
+
+/* --- tables and panes ----------------------------------------------------- */
+
+table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+}
+td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num { text-align: right; }
+
+/* ``width: 1%`` is the table idiom for "no wider than the content needs": the browser
+   gives such a column its minimum and hands the slack to the columns with none. Used
+   on the numeric columns whose values are one to three characters, so the descriptor
+   name and the pipe it is blocked on -- the two that are as long as the case made
+   them -- get the room instead. */
+th.tight, td.tight { width: 1%; white-space: nowrap; padding-left: 5px; padding-right: 5px; }
+tr.running td { background: color-mix(in srgb, var(--running) 12%, transparent); }
+tr.faulted td { background: color-mix(in srgb, var(--faulted) 12%, transparent); }
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--done);
+}
+.state.running::before { background: var(--running); }
+.state.ready::before { background: var(--ready); }
+.state.blocked::before { background: var(--blocked); }
+.state.suspended::before { background: var(--suspended); }
+.state.pinned_idle::before { background: var(--pinned-idle); }
+.state.faulted::before { background: var(--faulted); }
+
+.bar { position: relative; height: 4px; background: var(--line); border-radius: 2px; margin-top: 3px; }
+.bar span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+.bar.full span { background: var(--blocked); }
+
+.rows { padding: 6px 12px 10px; }
+.row { display: flex; gap: 8px; justify-content: space-between; padding: 2px 0; }
+.row .k { color: var(--dim); }
+.row .v { font-family: ui-monospace, monospace; }
+.row.changed .v { color: var(--running); font-weight: 600; }
+
+.stack-frame {
+  border: 1px solid var(--suspended);
+  border-radius: 5px;
+  padding: 3px 8px;
+  margin: 4px 12px;
+  font-size: 11.5px;
+}
+.stack-frame:first-child { border-width: 2px; }
+
+.fault {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.fault:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.fault .kind { color: var(--faulted); font-weight: 600; }
+.fault .detail { color: var(--dim); display: block; }
+
+.finding { padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 11.5px; }
+.finding .rule { font-weight: 600; }
+.finding.error .rule { color: var(--faulted); }
+.finding.warning .rule { color: var(--blocked); }
+.finding .detail { color: var(--dim); display: block; }
+
+.empty { color: var(--dim); padding: 10px 12px; font-size: 11.5px; margin: 0; }
+
+/* --- transport ------------------------------------------------------------ */
+
+#foot { border-top: 1px solid var(--line); background: var(--panel); }
+
+.transport { display: flex; align-items: center; gap: 6px; padding: 7px 12px; }
+.transport button {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 2px 7px;
+  font-size: 11px;
+  min-width: 28px;
+}
+.transport button:hover { border-color: var(--accent); color: var(--accent); }
+.transport button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+#slider { flex: 1; min-width: 120px; accent-color: var(--accent); }
+.at { color: var(--dim); font-size: 11px; min-width: 78px; text-align: right; }
+#marks { background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+         border-radius: 5px; font-size: 11px; padding: 2px 4px; max-width: 160px; }
+
+.strip { padding: 0 12px 4px; }
+#timeline { display: block; width: 100%; }
+.lane-label { font: 10px ui-monospace, monospace; fill: var(--dim); }
+.lane-bg { fill: var(--line); opacity: 0.35; }
+.seg.running { fill: var(--running); }
+.seg.ready { fill: var(--ready); }
+.seg.blocked { fill: var(--blocked); opacity: 0.75; }
+.seg.suspended { fill: var(--suspended); }
+.seg.pinned_idle { fill: var(--pinned-idle); opacity: 0.6; }
+.seg.done { fill: var(--done); opacity: 0.5; }
+.seg.faulted { fill: var(--faulted); }
+.cursor { stroke: var(--ink); stroke-width: 1.5; }
+.mark-tick { stroke: var(--dim); stroke-width: 1; }
+.mark-label { font: 9px ui-sans-serif, system-ui, sans-serif; fill: var(--dim); }
+
+.ticker {
+  padding: 5px 12px 9px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ticker b { color: var(--ink); font-weight: 600; }
+
+/* --- tokens ---------------------------------------------------------------- */
+
+/* One token, drawn as its own box. Chips rather than a joined line because a real
+   tokenizer's tokens are sub-word pieces, and where one ends is exactly what this
+   pane exists to show -- "count" and "ing" side by side is the fact. */
+.tok {
+  font: 11px ui-monospace, monospace;
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+  white-space: pre;
+}
+
+.toks { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.toks .more { color: var(--dim); font-size: 10.5px; align-self: center; }
+
+#tokens { max-height: 260px; overflow-y: auto; }
+#token-filter {
+  margin-left: auto;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 1px 4px;
+  max-width: 170px;
+}
+
+.stream { padding: 4px 12px 8px; }
+.move {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.move:last-child { border-bottom: none; }
+.move .glyph {
+  font: 10px ui-monospace, monospace;
+  color: var(--dim);
+  min-width: 22px;
+  text-align: center;
+  flex: none;
+}
+.move .who { color: var(--dim); font-size: 10.5px; min-width: 96px; flex: none; }
+.move .toks { margin-top: 0; }
+
+/* A generated token is the job speaking; an injected one is the world arriving.
+   Colouring the two apart is the provenance story the segment table keeps. */
+.move.gen .glyph { color: var(--running); }
+.move.gen .tok {
+  background: color-mix(in srgb, var(--running) 12%, transparent);
+  border-color: color-mix(in srgb, var(--running) 30%, transparent);
+}
+.move.in .glyph { color: var(--suspended); }
+.move.in .tok {
+  background: color-mix(in srgb, var(--suspended) 12%, transparent);
+  border-color: color-mix(in srgb, var(--suspended) 30%, transparent);
+}
+/* The movements this frame is standing on, so scrubbing shows what just happened. */
+.move.now { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+
+/* --- the descriptor sheet -------------------------------------------------- */
+
+/* A box in the diagram is a behaviour; this is what the behaviour says. Positioned
+   over everything rather than in the side column because a prompt is long, and a pane
+   narrow enough to sit beside the diagram is too narrow to read one in. */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, #000 55%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 10;
+}
+
+/* Any author rule setting ``display`` outranks the user agent's
+   ``[hidden] { display: none }``, so a class that sets one must restore the attribute's
+   meaning or the element is on screen no matter what the page does with ``.hidden``.
+   Specificity is what settles it -- 0,2,0 against 0,1,0 -- not source order.
+   ``test_a_hidden_element_can_actually_hide`` fails if this is ever dropped. */
+.modal[hidden] { display: none; }
+
+.sheet {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: min(860px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.sheet-head h2 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sheet-head .sub { font-family: ui-monospace, monospace; font-size: 11px; }
+#modal-close {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 9px;
+}
+#modal-close:hover { border-color: var(--accent); color: var(--accent); }
+
+/* The frontmatter, from the fields the payload already parsed it into. */
+.declared {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  columns: 2;
+  column-gap: 24px;
+  font-size: 11.5px;
+}
+.declared .row { break-inside: avoid; }
+
+#modal-body {
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.5 ui-monospace, monospace;
+}
+
+/* The diagram's boxes are now controls, and should say so. */
+.node { cursor: pointer; }
+.node:focus { outline: none; }
+.node:focus rect.body { stroke: var(--accent); stroke-width: 2.5; }
+.node:hover rect.body { stroke: var(--accent); }

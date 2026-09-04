@@ -1,0 +1,45 @@
+# The same six pipes as `cases/coop-count-pipe/`, wired to mean something different.
+#
+# In the pipe-driven case `count.a2b` and `count.b2a` are read by a blocking peer: a
+# write wakes a job that was already sitting there. Here nothing reads them. They are
+# vector sources, and a write to one *spawns* the peer -- so the handover is not a
+# message delivered to a waiting job, it is the event that brings the job into being.
+
+- name: count.a2b
+  ring: TRUSTED
+  principal: peer_job
+  capacity: 64
+
+- name: count.b2a
+  ring: TRUSTED
+  principal: peer_job
+  capacity: 64
+
+# The actuators, unchanged. Progress goes to world state and comes back as a status
+# region, which matters more here than in the pipe case rather than less: a job spawned
+# fresh each turn has no transcript to remember anything with, so the world store is not
+# a defence against paging, it is the only memory in the system.
+
+- name: count.progress_a
+  ring: TRUSTED
+  principal: device
+  world_object: count.a
+  capacity: 32
+
+- name: count.progress_b
+  ring: TRUSTED
+  principal: device
+  world_object: count.b
+  capacity: 32
+
+- name: keys.interrupt
+  ring: TRUSTED
+  principal: user
+  device: true
+  capacity: 8
+
+- name: keys.number
+  ring: TRUSTED
+  principal: user
+  device: true
+  capacity: 16

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Space Invader runs</title>
+<!-- The vendored table library first, so the stylesheet below can override it
+     and `Tabulator` is defined by the time our own script runs. Both are empty
+     in an exported run, which has no table to sort -- see web/server.py. -->
+<style>/*VENDOR_CSS*/</style>
+<style>/*CSS*/</style>
+</head>
+<body>
+<header id="top">
+  <a class="back" id="back" href="#/" hidden>&lsaquo; runs</a>
+  <div class="titles">
+    <h1 id="title">Space Invader runs</h1>
+    <p id="subtitle"></p>
+  </div>
+  <!--
+    Reloading is a property of the screen, not of the table, so the control sits
+    up here with the theme rather than in the index's toolbar: a comparison gets
+    it too, and a run -- which is a recording, and has a scrubber to lose --
+    does not. The script hides it on a screen that cannot reload in place.
+  -->
+  <div class="refresh" id="refresh" hidden>
+    <button id="auto" type="button" aria-pressed="true"
+            title="reload this screen on a timer">auto</button>
+    <select id="every" aria-label="how often to reload">
+      <option value="2">2s</option>
+      <option value="5">5s</option>
+      <option value="15">15s</option>
+      <option value="60">1m</option>
+    </select>
+  </div>
+  <button id="theme" type="button" title="light / dark">&#9681;</button>
+</header>
+
+<!--
+  The scrubber is the page's spine: one axis, and every lane below reads at the
+  tick it names. The strip under the slider is the episode end to end -- when
+  the model was waiting, who moved the stick, and where it mattered.
+-->
+<section id="scrubber" hidden>
+  <div class="transport">
+    <button id="back-one" type="button" title="step back (&larr;)">&#9664;</button>
+    <button id="play" type="button" title="play / pause (space)">&#9654;</button>
+    <button id="fwd-one" type="button" title="step forward (&rarr;)">&#9654;&#124;</button>
+    <input type="range" id="slider" min="0" value="0" step="1" aria-label="tick">
+    <output class="at" id="at">0 / 0</output>
+    <select id="marks" aria-label="jump to"><option value="">jump to&hellip;</option></select>
+  </div>
+  <div class="strip">
+    <div class="channels">
+      <span>wait</span><span>stick</span><span>event</span>
+    </div>
+    <svg id="signals" preserveAspectRatio="none" aria-hidden="true"></svg>
+  </div>
+</section>
+
+<!--
+  The index's controls. Static markup hidden by default, like the scrubber: the
+  group chips are filled in by the script, because the groups are declared with
+  the columns and one list of them is easier to keep true than two.
+-->
+<section id="toolbar" hidden>
+  <input type="search" id="search" placeholder="search&hellip;"
+         aria-label="search runs" autocomplete="off">
+  <span id="groups" class="groups"></span>
+  <button id="filters" type="button" aria-pressed="false"
+          title="a filter box per column">filters</button>
+  <button id="diff" type="button" aria-pressed="false"
+          title="tick rows to hold up against each other: the columns they agree
+on are put away, and the ticked rows go to the top">diff</button>
+  <button id="reset" type="button"
+          title="forget every sort, filter and column choice this browser has
+remembered, here and on a comparison">reset</button>
+  <output id="shown" class="shown"></output>
+</section>
+
+<main id="screen"></main>
+
+<script>window.__RUN__ = __DATA__;</script>
+<script>/*VENDOR_JS*/</script>
+<script>/*JS*/</script>
+</body>
+</html>

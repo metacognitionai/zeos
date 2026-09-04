@@ -1,0 +1,18 @@
+# Pipe declarations. Ring and principal are assigned here, by the kernel, from
+# provenance -- never claimed by the content that arrives on them (MP §4).
+
+- name: sensors.threshold
+  ring: EXTERNAL
+  principal: device
+  device: true
+  capacity: 256
+
+- name: actuators.unit_a
+  ring: TRUSTED
+  principal: device
+  world_object: plant.unit_a
+
+- name: ops.report
+  ring: TRUSTED
+  principal: user
+  capacity: 512

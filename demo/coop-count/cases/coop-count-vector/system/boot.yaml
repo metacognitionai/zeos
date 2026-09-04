@@ -1,0 +1,8 @@
+# Only counter-a boots. counter-b has no existence until counter-a writes to
+# `count.a2b`, and every counter-a after this first one is spawned the same way, by
+# counter-b's write to `count.b2a`.
+#
+# So this list is not "the jobs", it is the ignition. Nothing else in the case can start
+# itself, which is the difference between a system driven by events and one driven by
+# jobs that wait.
+- counter-a

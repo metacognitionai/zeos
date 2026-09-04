@@ -1,0 +1,4 @@
+# Two identical jobs at the same priority, so the scheduler has a tie to break
+# at every boundary. Distinct names only so the viewer's lanes read apart.
+- counter1
+- counter2

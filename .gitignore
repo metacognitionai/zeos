@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Runs and journals -- regenerable, and large. A case's `events.jsonl` is the
+# exception: it is scripted *input* to a run rather than output from one.
+*.jsonl
+!**/cases/**/events.jsonl
+# Test fixtures carry their own event schedules and must travel with the repository.
+!tests/fixtures/**/*.jsonl
+
+# A demo's run output, at any depth. The demo's own .gitignore covers it for
+# git, but the sdist builder reads only this file, so run artifacts reach the
+# tarball unless the root list names them too.
+runs/
+
+# Editor state -- personal to a checkout, never shared
+.vscode/
+.idea/
+
+# Secrets -- never committed, at any depth
+.env

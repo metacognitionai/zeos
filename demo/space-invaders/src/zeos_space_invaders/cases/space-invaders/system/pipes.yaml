@@ -1,0 +1,24 @@
+# Ring and principal are assigned here from provenance, never claimed by the
+# content that arrives (MP §4); everything a job reads comes from our own
+# simulator or a served model, so nothing exceeds ring 2.
+
+# A level-triggered sensor: the newest board is the only one worth having, so the
+# device adapter replaces the previous reading rather than queueing behind it.
+- name: game.state
+  ring: TRUSTED
+  principal: device
+  device: true
+
+# Bound to a vector, so a write here is an interrupt rather than dataflow.
+- name: game.threats
+  ring: TRUSTED
+  principal: device
+  device: true
+
+# `world_object` makes this a register rather than a queue: the kernel latches a
+# write to a world-backed pipe, so a job that actuates once a turn cannot back up
+# against its own buffer.
+- name: game.controls
+  ring: TRUSTED
+  principal: device
+  world_object: game.action

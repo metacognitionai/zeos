@@ -1,0 +1,4 @@
+# Weights: ~2.7GB, fetched with `uv run zeos-count fetch-model`.
+# No trailing slash: during development this is often a symlink to a shared
+# download, and `models/` would not match one.
+/models

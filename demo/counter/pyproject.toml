@@ -1,0 +1,20 @@
+[project]
+name = "counter-demo"
+version = "0.1.0"
+description = "The counter demo: jobs counting to five, on a tape or on a model"
+requires-python = ">=3.12"
+dependencies = [
+    "zeos",
+    # For the claude and qwen machine seats only; the scripted default needs
+    # nothing beyond zeos.
+    "anthropic>=1.0",
+    "llama-cpp-python>=0.3.35",
+    "huggingface-hub>=0.34",
+]
+
+[tool.uv]
+# Plain scripts, not a package: nothing here builds, installs, or ships.
+package = false
+
+[tool.uv.sources]
+zeos = { workspace = true }

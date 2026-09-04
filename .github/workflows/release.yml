@@ -1,0 +1,157 @@
+name: release
+
+# Publishing a GitHub Release is the trigger, so the tag, the notes and the
+# upload are one act rather than three that can disagree.
+on:
+  release:
+    types: [published]
+
+# Nothing is granted by default; each job asks for exactly what it needs. The
+# token that can upload to PyPI exists only inside `publish`.
+permissions: {}
+
+env:
+  # The one place the artifact name is written, so `build` and its consumers
+  # cannot drift apart.
+  DIST: dist
+
+jobs:
+  build:
+    # A tag is the release's claim about what is inside it. This is where the
+    # claim is checked against what the tree actually says -- before a
+    # distribution exists, let alone reaches PyPI, where a filename is
+    # permanent and cannot be reused even after a delete.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # Release workflows are pinned by commit, not by tag: a tag can be moved,
+      # and this is the job whose neighbour holds an upload token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Check the tag names the version the tree declares
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import pathlib
+          import sys
+          import tomllib
+
+          tag = os.environ["TAG"]
+          with open("pyproject.toml", "rb") as handle:
+              version = tomllib.load(handle)["project"]["version"]
+          citation = pathlib.Path("CITATION.cff").read_text(encoding="utf-8")
+
+          problems = []
+          if tag != f"v{version}":
+              problems.append(f"tag {tag!r} is not v{version} from pyproject.toml")
+          if f"version: {version}" not in citation:
+              problems.append(f"CITATION.cff does not declare version {version}")
+          if problems:
+              sys.exit("\n".join(problems))
+          print(f"version={version}")
+          PY
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check what the distributions contain
+        # The same policy test CI runs on every PR, run once more against the
+        # exact tree being released.
+        run: uv run pytest tests/contract/test_dist_contents.py
+
+      - name: Build the distributions
+        # `--package zeos` so the workspace demos are not built: nothing from
+        # demo/ is being published here.
+        run: uv build --package zeos --out-dir "$DIST"
+
+      - name: Check the metadata renders
+        run: uv tool run --from twine twine check --strict "$DIST"/*
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Approval gate. The environment also carries the PyPI trusted-publisher
+    # binding: PyPI checks the repository, its owner id, this workflow's
+    # filename and this environment name before it accepts a token.
+    environment:
+      name: release
+      url: https://pypi.org/project/zeos/${{ needs.build.outputs.version }}
+    permissions:
+      # Trusted publishing: a short-lived OIDC token, exchanged with PyPI at
+      # upload. There is no long-lived API token anywhere in this repository.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}/
+
+      # Attestations (PEP 740) are generated and uploaded by default. Leave
+      # them on: they are what lets an installer verify the file came from this
+      # workflow in this repository.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          packages-dir: ${{ env.DIST }}
+
+  smoke:
+    # What PyPI actually serves, exercised the way an installer would get it:
+    # a clean environment, the published wheel, no repository on the path.
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          # Only the descriptor tree is wanted; the package under test comes
+          # from PyPI, not from here.
+          sparse-checkout: tests/fixtures/smoke
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+      - name: Install the published release into a clean environment
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 /tmp/smoke
+          # A new file takes a moment to appear on the index; the retries are
+          # for propagation, not for a failing install.
+          for attempt in 1 2 3 4 5; do
+            if uv pip install --python /tmp/smoke --no-cache "zeos==$VERSION"; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          echo "zeos==$VERSION never became installable from PyPI" >&2
+          exit 1
+
+      - name: Run the determinism gate against the published wheel
+        run: |
+          set -euo pipefail
+          zeos=/tmp/smoke/bin/zeos
+          "$zeos" lint tests/fixtures/smoke
+          "$zeos" run tests/fixtures/smoke \
+            --events tests/fixtures/smoke/events.jsonl --journal journal.jsonl --seed 7
+          "$zeos" replay journal.jsonl --assert-identical

@@ -1,0 +1,122 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # ready_for_review is not in the default set; without it, a PR opened as
+    # a draft and later marked ready would never re-trigger the skipped lanes.
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One run per branch: a new push cancels the previous run, except on main,
+# where every run completes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    # Draft PRs don't burn the matrix; mark ready-for-review to run CI.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen --python ${{ matrix.python }}
+      - name: Run tests
+        run: uv run pytest --durations=15
+
+      # What was actually installed on this leg, as opposed to what uv.lock
+      # asked for. Attached to a release so "CI was green against these" is a
+      # record rather than a recollection.
+      - name: Record the resolved dependency versions
+        run: uv pip freeze > resolved-${{ matrix.os }}-${{ matrix.python }}.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: resolved-${{ matrix.os }}-${{ matrix.python }}
+          path: resolved-${{ matrix.os }}-${{ matrix.python }}.txt
+          if-no-files-found: error
+
+  determinism-gate:
+    # The project's flagship guarantee, as its own permanently visible check:
+    # same tree + same schedule + same seed -> byte-identical journal.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run the determinism gate
+        run: uv run pytest -m determinism --durations=15
+
+  pre-commit:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run pre-commit on changed files
+        if: github.event_name == 'pull_request'
+        run: >
+          uv run pre-commit run --show-diff-on-failure
+          --from-ref origin/${{ github.base_ref }} --to-ref HEAD
+      - name: Run pre-commit on the whole tree
+        if: github.event_name != 'pull_request'
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  pyright:
+    # Strict mode, 0 errors, blocking. The version comes from the committed
+    # lockfile, so local and CI can never disagree about what "clean" means.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run pyright (strict)
+        run: uv run pyright
+
+  ci-gate:
+    # The single check branch protection will require: green only when every
+    # lane above succeeded. Lanes can be added or resharded without touching
+    # the ruleset, as long as they are added to `needs` here. `if: always()`
+    # matters -- without it, a failed or skipped lane would leave this job
+    # skipped, and a skipped check does not block a merge.
+    if: always()
+    needs: [test, determinism-gate, pre-commit, pyright]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that every lane succeeded
+        run: |
+          echo "results: ${{ join(needs.*.result, ', ') }}"
+          [ "${{ contains(needs.*.result, 'failure') }}" = "false" ] &&
+          [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] || exit 1

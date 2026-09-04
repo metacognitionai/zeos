@@ -1,0 +1,27 @@
+# Mirrors CI: ruff is the only formatter and linter, pinned to the same
+# version as pyproject.toml (0.16.5). Hook repos are pinned by SHA.
+#
+#   uv run pre-commit install      # once, to enable the git hook
+#   uv run pre-commit run -a       # run on the whole tree
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: 1f1e8bf348ff38fc88619a38d3ca4d9c56abea49  # v0.16.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+        # v0.16.5 added markdown to this hook's own file types; a demo with its
+        # own [tool.ruff] never sees the root's exclude list.
+        types_or: [python, pyi, jupyter]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+  - repo: https://github.com/codespell-project/codespell
+    rev: 63c8f8312b7559622c0d82815639671ae42132ac  # v2.4.1
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]  # so it reads [tool.codespell] in pyproject

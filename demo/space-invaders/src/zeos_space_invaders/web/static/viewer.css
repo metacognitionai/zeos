@@ -1,0 +1,699 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-only
+ * Copyright (C) 2026 Metacognition AI
+ *
+ * This source code is licensed under the AGPL-3.0-only licence found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+/* An instrument, not an arcade: the page holds two clocks against each other,
+ * so it is built like a logic analyser -- channels on one axis, a cursor you
+ * drag, a readout per channel. Warm is the slow billed path (the model, the
+ * pilot), cool the instant free one (the reflex, the kernel). No web fonts: the
+ * exported file has to open from a filesystem with no network.
+ */
+
+:root {
+  --ground: #f2f4f7;
+  --panel: #ffffff;
+  --sunk: #e8ecf1;
+  --rule: #d3dae3;
+  --ink: #1b2430;
+  --ink-dim: #5e6b7a;
+  --deliberate: #b4690e;   /* pilot, model: slow, billed */
+  --reflex: #0e7c86;       /* evade, kernel: instant, free */
+  --kill: #2f7d3a;
+  --hurt: #b3261e;
+  --cursor: #1b2430;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --gap: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #12171d;
+    --panel: #1a212a;
+    --sunk: #151b22;
+    --rule: #2a343f;
+    --ink: #dce4ec;
+    --ink-dim: #8393a4;
+    --deliberate: #e8a33d;
+    --reflex: #38bec9;
+    --kill: #5fb16c;
+    --hurt: #f2554b;
+    --cursor: #dce4ec;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #12171d;
+  --panel: #1a212a;
+  --sunk: #151b22;
+  --rule: #2a343f;
+  --ink: #dce4ec;
+  --ink-dim: #8393a4;
+  --deliberate: #e8a33d;
+  --reflex: #38bec9;
+  --kill: #5fb16c;
+  --hurt: #f2554b;
+  --cursor: #dce4ec;
+}
+
+* { box-sizing: border-box; }
+
+/* Always reserve the vertical scrollbar: a run's panes change height as you
+   scrub, and a bar that comes and goes reflows the board under the cursor. */
+html { overflow-y: scroll; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 600; }
+a { color: inherit; }
+
+/* --- the top strip ------------------------------------------------------- */
+
+#top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap);
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+}
+#top .titles { flex: 1; min-width: 0; }
+#title { font-size: 16px; letter-spacing: -0.01em; }
+#subtitle {
+  margin: 3px 0 0;
+  color: var(--ink-dim);
+  font: 12px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.back { color: var(--ink-dim); text-decoration: none; white-space: nowrap; }
+.back:hover { color: var(--ink); }
+#theme {
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--ink-dim);
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 3px 8px;
+  line-height: 1;
+}
+
+/* --- the scrubber, which is the spine ------------------------------------ */
+
+#scrubber {
+  padding: 10px 20px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.transport { display: flex; align-items: center; gap: 8px; }
+.transport button {
+  font: 12px/1 var(--sans);
+  min-width: 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.transport button:hover { border-color: var(--ink-dim); }
+.transport button[aria-pressed="true"] { border-color: var(--deliberate); color: var(--deliberate); }
+
+#slider {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--cursor);
+  margin: 0;
+}
+.at {
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+#marks {
+  font: 12px var(--sans);
+  background: var(--panel);
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 4px 6px;
+  max-width: 190px;
+}
+
+.strip { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.channels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  width: 42px;
+  flex: none;
+  text-align: right;
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+#signals {
+  flex: 1;
+  height: 46px;
+  min-width: 0;
+  background: var(--sunk);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* --- reloading on a timer ------------------------------------------------ */
+
+.refresh { display: flex; align-items: center; gap: 4px; flex: none; }
+/* An author rule beats the browser's own `[hidden] { display: none }`, so the
+   flex above would keep this control on screen on a run. */
+.refresh[hidden] { display: none; }
+.refresh button,
+.refresh select {
+  font: 11.5px/1 var(--sans);
+  padding: 5px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.refresh button:hover { border-color: var(--ink-dim); color: var(--ink); }
+.refresh button[aria-pressed="true"] {
+  border-color: var(--reflex);
+  color: var(--reflex);
+}
+.refresh select { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.refresh select:disabled { opacity: 0.4; cursor: default; }
+
+/* One flash per reload that came back. Without it "auto" is a button that
+   appears to do nothing in a directory where nothing is happening. */
+.refresh button.pulse { animation: pulse 420ms ease-out; }
+@keyframes pulse {
+  from { background: var(--reflex); color: var(--panel); }
+  to { background: var(--panel); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .refresh button.pulse { animation: none; }
+}
+
+/* --- the index's toolbar ------------------------------------------------- */
+
+/* Sits where the scrubber sits on a run screen: the one strip of controls for
+   the screen below it. */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 20px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+/* An id selector beats the browser's own `[hidden] { display: none }`, so the
+   flex above would keep this strip on screen on a run and on a comparison. */
+#toolbar[hidden] { display: none; }
+#toolbar input[type="search"] {
+  font: 12px var(--sans);
+  padding: 5px 8px;
+  min-width: 170px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--ground);
+  color: var(--ink);
+}
+#toolbar button {
+  font: 12px/1 var(--sans);
+  padding: 6px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+#toolbar button:hover { border-color: var(--ink-dim); color: var(--ink); }
+#toolbar button[aria-pressed="true"] {
+  border-color: var(--deliberate);
+  color: var(--deliberate);
+}
+/* Off while the diff mode is on: both, and the search box, choose what is on
+   screen. Left in place rather than hidden, so the strip keeps its shape. */
+#toolbar button:disabled,
+#toolbar input[type="search"]:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+#toolbar button:disabled:hover { border-color: var(--rule); color: var(--ink-dim); }
+.groups { display: flex; gap: 5px; }
+.chip { text-transform: lowercase; letter-spacing: 0.04em; }
+.shown {
+  margin-left: auto;
+  font: 11.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+}
+
+/* --- lanes --------------------------------------------------------------- */
+
+main { padding: var(--gap) 20px 40px; display: grid; gap: var(--gap); }
+.lanes { display: grid; grid-template-columns: minmax(320px, 430px) 1fr; gap: var(--gap); }
+@media (max-width: 860px) { .lanes { grid-template-columns: 1fr; } }
+
+.lane {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+.lane > h2 {
+  font-size: 9.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-bottom: 10px;
+}
+.lane.wide { padding: 12px 0 0; overflow: hidden; }
+.lane.wide > h2 { padding: 0 14px; }
+.lane.warm { border-top: 2px solid var(--deliberate); }
+.lane.cool { border-top: 2px solid var(--reflex); }
+
+/* --- the board ----------------------------------------------------------- */
+
+#board { width: 100%; height: auto; display: block; }
+#board .cell { fill: none; stroke: var(--rule); stroke-width: 0.5; }
+#board .monster { fill: var(--ink); }
+#board .monster text { fill: var(--panel); }
+#board .player { fill: var(--reflex); }
+#board .shot { fill: var(--deliberate); }
+#board .danger { fill: var(--hurt); }
+/* No transition on the pieces: a missile or a falling `d` has no identity
+   between two ticks, and interpolating draws a slide across the board that
+   never happened. */
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 10px;
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+}
+.readout b { color: var(--ink); font-weight: 600; }
+.readout .over { color: var(--hurt); }
+
+/* --- the decision -------------------------------------------------------- */
+
+.who {
+  font: 600 13px var(--mono);
+  letter-spacing: 0.02em;
+}
+.who.pilot, .who.model { color: var(--deliberate); }
+.who.evade { color: var(--reflex); }
+.who.held, .who.random, .who.human { color: var(--ink-dim); }
+
+.headline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.action {
+  font: 600 15px var(--mono);
+  padding: 1px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+}
+.flag {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+}
+.flag.bad { color: var(--hurt); }
+.flag.cool { color: var(--reflex); }
+
+.facts {
+  margin: 8px 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  font: 12px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.facts dt { color: var(--ink-dim); }
+.facts dd { margin: 0; }
+.late { color: var(--deliberate); }
+
+details { margin-top: 10px; border-top: 1px solid var(--rule); padding-top: 8px; }
+details > summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+details pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--sunk);
+  border-radius: 2px;
+  font: 12px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 340px;
+}
+
+/* Two decisions on one tick, and the pass not yet answered, each end in a fold
+   whose `pre` scrolls, so without a rule the next block reads as the tail of
+   the last. */
+#decision > * + * {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+}
+
+/* Not the `--sunk` of a `pre`: a block in the fill the model's own text is
+   quoted in reads as more of it. */
+.waiting {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--deliberate);
+  font: 12px/1.5 var(--mono);
+  color: var(--ink-dim);
+}
+/* The box has a border of its own; the rule above only supplies the gap. */
+#decision > .waiting { padding: 10px 12px; }
+.waiting .pending {
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.waiting p { margin: 0; }
+.waiting b { color: var(--deliberate); }
+.idle { color: var(--ink-dim); font: 12px var(--mono); margin: 0; }
+
+/* --- tables -------------------------------------------------------------- */
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left;
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  font-weight: 600;
+  padding: 0 10px 6px 0;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+td {
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid var(--rule);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+td.num, th.num { text-align: right; }
+tr.row { cursor: pointer; }
+tr.row:hover td { background: var(--sunk); }
+tr.child td:first-child { padding-left: 20px; color: var(--ink-dim); }
+tr.dim td { color: var(--ink-dim); }
+.mono { font-family: var(--mono); }
+.tag {
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0 5px;
+}
+.won { color: var(--kill); }
+.lost { color: var(--hurt); }
+
+.ticker { list-style: none; margin: 10px 0 0; padding: 0; max-height: 190px; overflow-y: auto; }
+.ticker li {
+  font: 11.5px/1.6 var(--mono);
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule);
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deeper {
+  margin: 12px 0 0;
+  font: 11.5px/1.7 var(--sans);
+  color: var(--ink-dim);
+}
+.deeper code {
+  display: block;
+  margin-top: 4px;
+  font: 11px/1.6 var(--mono);
+  color: var(--ink);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.empty {
+  color: var(--ink-dim);
+  padding: 40px 0;
+  text-align: center;
+  font: 13px/1.7 var(--sans);
+}
+.empty code {
+  font-family: var(--mono);
+  background: var(--sunk);
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+:focus-visible { outline: 2px solid var(--deliberate); outline-offset: 2px; }
+
+/* --- the vendored table -------------------------------------------------- */
+
+/* Tabulator ships compiled CSS with its own class names and no custom
+ * properties, so this layer puts it back onto the page's palette. Everything
+ * below is written in tokens, which is what makes the light/dark switch free
+ * here: nothing picks a hex.
+ */
+
+.tabulator {
+  background: transparent;
+  border: none;
+  font: 13px/1.5 var(--sans);
+  color: var(--ink);
+}
+/* Tabulator paints two of its three nested boxes white with #333 text, at a
+   specificity that beats anything inherited from `.tabulator`; the dark theme
+   cannot do without this rule. */
+.tabulator-tableholder { background: transparent; overflow: auto; }
+.tabulator .tabulator-tableholder .tabulator-table {
+  background-color: transparent;
+  color: var(--ink);
+}
+.tabulator-tableholder:focus { outline: none; }
+
+.tabulator .tabulator-header {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-dim);
+}
+.tabulator .tabulator-header .tabulator-col {
+  background: transparent;
+  border-right: none;
+}
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover {
+  background: var(--sunk);
+}
+/* One declaration for the header and for the offscreen probe that measures it
+   (`floorFor` in viewer.js): they have to agree to the pixel. */
+.tabulator .tabulator-col-title,
+.probe {
+  font-family: var(--sans);
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.tabulator .tabulator-col-title { padding: 0 4px 4px 0; }
+.probe {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.probe span { display: inline-block; }
+.tabulator .tabulator-col-content { padding: 6px 8px 2px; }
+/* Tabulator's arrow is a bordered triangle; recoloured, not redrawn. */
+.tabulator .tabulator-col.tabulator-sortable[aria-sort="none"] .tabulator-arrow,
+.tabulator .tabulator-col-sorter .tabulator-arrow {
+  border-bottom-color: var(--rule);
+}
+.tabulator .tabulator-col[aria-sort="ascending"] .tabulator-arrow,
+.tabulator .tabulator-col[aria-sort="descending"] .tabulator-arrow {
+  border-bottom-color: var(--deliberate);
+  border-top-color: var(--deliberate);
+}
+.tabulator .tabulator-header .tabulator-col.tabulator-moving {
+  background: var(--sunk);
+  border: 1px solid var(--deliberate);
+}
+
+.tabulator-row {
+  background: transparent;
+  border-bottom: 1px solid var(--rule);
+  min-height: 0;
+}
+.tabulator-row.tabulator-row-even { background: transparent; }
+.tabulator-row.tabulator-selectable:hover,
+.tabulator-row:hover { background: var(--sunk); cursor: pointer; }
+.tabulator-row .tabulator-cell {
+  border-right: none;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tabulator-row .tabulator-cell:focus { outline: none; }
+
+/* A comparison's own line is a row like the others; weight and a rule are what
+   say it heads a group. */
+.tabulator-row.tabulator-tree-level-0:has(.tabulator-data-tree-control) {
+  border-top: 1px solid var(--rule);
+}
+.tabulator-row.tabulator-tree-level-0:has(.tabulator-data-tree-control)
+  .tabulator-cell { font-weight: 600; }
+.tabulator-row.tabulator-tree-level-1 .tabulator-cell { color: var(--ink-dim); }
+
+/* --- diff mode ---
+   A picked row is marked down its left edge rather than filled, because the
+   reader is reading across it; everything not picked goes quiet but stays. */
+.tabulator-row.tabulator-selected,
+.tabulator-row.tabulator-selected:hover { background: var(--sunk); }
+.tabulator-row.tabulator-selected .tabulator-cell:first-child {
+  box-shadow: inset 2px 0 0 var(--deliberate);
+}
+.picking .tabulator-row:not(.tabulator-selected) .tabulator-cell {
+  color: var(--ink-dim);
+  opacity: 0.65;
+}
+/* Tabulator paints the tick column grey with two borders, which reads as a
+   gutter bolted to the table rather than part of a row. */
+.tabulator .tabulator-cell.pick,
+.tabulator .tabulator-col.pick,
+.tabulator .tabulator-row-header {
+  background: transparent;
+  border-right: none;
+  border-bottom: none;
+  padding-left: 10px;
+}
+.tabulator .pick input[type="checkbox"] {
+  accent-color: var(--deliberate);
+  cursor: pointer;
+}
+.tabulator-data-tree-control {
+  border-color: var(--ink-dim);
+}
+.tabulator-data-tree-control:hover { background: var(--rule); }
+.tabulator-data-tree-control-collapse,
+.tabulator-data-tree-control-expand { background: var(--ink-dim); }
+.tabulator-data-tree-control-collapse:after,
+.tabulator-data-tree-control-expand:after { background: var(--ink-dim); }
+
+/* The dropdown a `list` header filter opens. Its own element, outside
+   `.tabulator`, so none of the above reaches it. */
+.tabulator-edit-list {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.tabulator-edit-list .tabulator-edit-list-item,
+.tabulator-edit-list .tabulator-edit-list-placeholder {
+  font: 12px var(--mono);
+  color: var(--ink-dim);
+}
+.tabulator-edit-list .tabulator-edit-list-item.active,
+.tabulator-edit-list .tabulator-edit-list-item.focused {
+  background: var(--sunk);
+  color: var(--ink);
+}
+.tabulator-header-filter input,
+.tabulator-header-filter select {
+  font: 11px var(--mono);
+  width: 100%;
+  padding: 2px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--ground);
+  color: var(--ink);
+}
+
+.tabulator-menu,
+.tabulator-popup-container {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  color: var(--ink);
+  max-height: 70vh;
+}
+.tabulator-menu .tabulator-menu-item {
+  font: 12px var(--sans);
+  padding: 4px 12px;
+  color: var(--ink-dim);
+}
+.tabulator-menu .tabulator-menu-item:not(.tabulator-menu-item-disabled):hover {
+  background: var(--sunk);
+  color: var(--ink);
+}
+.tabulator-menu .tabulator-menu-separator { border-top: 1px solid var(--rule); }
+/* The tick column is fixed-width so the labels line up whether ticked or not. */
+.menu-col b {
+  display: inline-block;
+  width: 12px;
+  color: var(--deliberate);
+  font-weight: 400;
+}
+.menu-col.on { color: var(--ink); }
+
+.tabulator .tabulator-placeholder,
+.tabulator .tabulator-placeholder .tabulator-placeholder-contents {
+  background: transparent;
+  color: var(--ink-dim);
+  font: 13px var(--sans);
+  font-weight: 400;
+}
+
+/* The column menu's handle is the only way to find the column list, so it
+   cannot be hidden; quiet until the pointer is on that header is the
+   compromise. */
+.tabulator .tabulator-header-popup-button {
+  color: var(--ink-dim);
+  opacity: 0.35;
+  font-size: 12px;
+  padding: 0 5px 0 0;
+}
+.tabulator .tabulator-col:hover .tabulator-header-popup-button { opacity: 1; }
+.tabulator .tabulator-header-popup-button:hover { color: var(--deliberate); }

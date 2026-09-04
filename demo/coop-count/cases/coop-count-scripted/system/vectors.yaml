@@ -1,0 +1,28 @@
+# The interrupt vector table.
+#
+# A write to `keys.interrupt` dispatches `reset-count` at priority 5, which outranks
+# both counters -- they are both 50 -- so it preempts whichever is running within a
+# token boundary.
+#
+# Their being *equal* is load-bearing and not an accident of configuration. Preemption
+# needs a strictly higher priority, so a peer woken at 50 never displaces a peer running
+# at 50, and each job reaches the `read stdin;` that ends its turn. Give them different
+# priorities and the woken one preempts the running one in the gap between its handover
+# write and that read -- every turn, so the lower-priority job stops blocking on a pipe
+# at all and is driven by preempt-and-resume instead. The counts still come out right,
+# which is what makes it worth a comment: the mechanism the case exists to demonstrate
+# stops being used and nothing looks wrong.
+#
+# `policy: queue` is edge-triggered and serialised: each keypress is its own event and
+# none is coalesced away, which is what you want from a keyboard and not what you want
+# from a level sensor.
+#
+# `deadline` is the budget this binding is supposed to meet, measured from the
+# keypress to the handler's first corrective action.
+
+- vector: keyboard-interrupt
+  source: keys.interrupt
+  handler: reset-count
+  priority: 5
+  policy: queue
+  deadline: 500ms

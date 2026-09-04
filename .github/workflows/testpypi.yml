@@ -1,0 +1,124 @@
+name: testpypi
+
+# The rehearsal. Run by hand on a release candidate, before the tag that would
+# make it real: TestPyPI is where an upload can still be got wrong for free.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  DIST: dist
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Refuse anything that is not a release candidate
+        id: version
+        # A final version uploaded here would burn that filename on TestPyPI --
+        # and, worse, make the rehearsal indistinguishable from the real thing.
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import re
+          import sys
+          import tomllib
+
+          with open("pyproject.toml", "rb") as handle:
+              version = tomllib.load(handle)["project"]["version"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+rc\d+", version):
+              sys.exit(f"{version!r} is not a release candidate: bump to X.Y.ZrcN first")
+          print(f"version={version}")
+          PY
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check what the distributions contain
+        run: uv run pytest tests/contract/test_dist_contents.py
+
+      - name: Build the distributions
+        run: uv build --package zeos --out-dir "$DIST"
+
+      - name: Check the metadata renders
+        run: uv tool run --from twine twine check --strict "$DIST"/*
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/zeos/${{ needs.build.outputs.version }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          packages-dir: ${{ env.DIST }}
+          repository-url: https://test.pypi.org/legacy/
+
+  validate:
+    # The point of the rehearsal: prove the candidate installs and runs from an
+    # index, rather than from the tree that built it.
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: tests/fixtures/smoke
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+      - name: Install the candidate into a clean environment
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 /tmp/rc
+          # zeos comes from TestPyPI; its dependencies do not live there, so
+          # PyPI stays in the search path for them.
+          for attempt in 1 2 3 4 5; do
+            if uv pip install --python /tmp/rc --no-cache \
+                 --index-strategy unsafe-best-match \
+                 --extra-index-url https://test.pypi.org/simple/ \
+                 "zeos==$VERSION"; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          echo "zeos==$VERSION never became installable from TestPyPI" >&2
+          exit 1
+
+      - name: Run the determinism gate against the installed candidate
+        run: |
+          set -euo pipefail
+          zeos=/tmp/rc/bin/zeos
+          "$zeos" lint tests/fixtures/smoke
+          "$zeos" run tests/fixtures/smoke \
+            --events tests/fixtures/smoke/events.jsonl --journal journal.jsonl --seed 7
+          "$zeos" replay journal.jsonl --assert-identical

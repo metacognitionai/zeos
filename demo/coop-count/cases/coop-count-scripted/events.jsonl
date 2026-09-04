@@ -1,0 +1,15 @@
+# A keypress and a typed number, without a keyboard. `--events` is the same
+# device-adapter path the console uses -- Kernel.deliver either way -- so this is
+# the interrupt, reproducibly, for anyone without a terminal to press space at.
+#
+# The times are matched to the tapes in `goals/`, which is what a tape costs: the
+# driver advances one millisecond of virtual time per turn of its loop, so 39ms is
+# the boundary right after counter-b has said fifteen and right before it would say
+# the next number.
+#
+# The number follows one millisecond later, sooner than a person could type it, so
+# that it is already buffered when the handler reads. A handler parked on the
+# console does not hold the machine -- counter-b is resumed while it waits, and
+# carries on counting from where it was until the reset actually lands.
+{"at_ns": 39000000, "pipe": "keys.interrupt", "text": "attention"}
+{"at_ns": 40000000, "pipe": "keys.number", "text": "51"}

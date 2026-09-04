@@ -1,0 +1,21 @@
+{
+  "board": {
+    "width": 9,
+    "height": 8,
+    "monster_rows": 2,
+    "monster_cols": 5,
+    "monster_col_offset": 2,
+    "lives": 3,
+    "missile_rows": 1,
+    "danger_rows": 1,
+    "march_group": 3,
+    "fire_chance": 0.45
+  },
+  "play": {
+    "view": "lead",
+    "effort": "none",
+    "tick": 0.2,
+    "max_steps": 300,
+    "history": 5
+  }
+}

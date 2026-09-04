@@ -1,0 +1,3 @@
+# Only the pilot boots: the reflex is dispatched by its vector, which is what
+# makes it an interrupt rather than a loop.
+- pilot

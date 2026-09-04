@@ -1,0 +1,29 @@
+# Categories for GitHub's auto-generated release notes. The notes are the
+# changelog: every change reaches main as a squashed PR whose title is the
+# commit subject, so there is nothing for a hand-written CHANGELOG to add that
+# `git log` does not already say.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: Fixes
+      labels:
+        - bug
+    - title: Changes
+      labels:
+        - enhancement
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Dependencies
+      labels:
+        - dependencies
+        - github_actions
+        - python:uv
+    # Anything unlabelled still appears, rather than vanishing from the notes.
+    - title: Other changes
+      labels:
+        - "*"

@@ -1,0 +1,32 @@
+{
+  "run": "runs/claude-prompt-loop",
+  "gif": "claude-plays-space-invaders.gif",
+  "board": {
+    "width": 12,
+    "height": 16,
+    "monster_rows": 3,
+    "monster_cols": 5,
+    "monster_col_offset": 1,
+    "lives": 3,
+    "missile_rows": 1,
+    "danger_rows": 1,
+    "march_group": 1,
+    "fire_chance": 0.25
+  },
+  "play": {
+    "player": "claude",
+    "model": null,
+    "view": "lead",
+    "effort": "none",
+    "seed": 7,
+    "tick": 0.5,
+    "actions_per_tick": 1,
+    "max_steps": 600,
+    "history": 5
+  },
+  "draw": {
+    "cell": 40,
+    "duration": 120,
+    "scale": 1
+  }
+}

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use ZEOS in your research, please cite it as below."
+title: "ZEOS: A Transformer Operating System"
+type: software
+authors:
+  - family-names: "van den Hengel"
+    given-names: "Anton"
+  - family-names: "Avraham"
+    given-names: "Gil"
+  - family-names: "Zhang"
+    given-names: "Jiahao"
+  - family-names: "Gould"
+    given-names: "Stephen"
+repository-code: "https://github.com/metacognitionai/zeos"
+abstract: >-
+  ZEOS programs transformer-mediated systems the way real-time operating
+  systems are programmed: a hierarchy of task descriptors scheduled by a
+  kernel, with priority-preemptive scheduling, protected mode, and virtual
+  context for LLM jobs.
+license: AGPL-3.0-only
+version: 0.1.0
+date-released: 2026-08-26

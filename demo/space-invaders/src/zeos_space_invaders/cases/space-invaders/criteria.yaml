@@ -1,0 +1,42 @@
+# What counts as having solved this problem, judged off the journal after a run.
+# Written against source pipes and world objects, never a descriptor name, so any
+# solution can be held to them; `zeos.demo.criteria` evaluates them.
+
+- kind: vector_fired
+  id: fire-reaches-a-handler
+  source: game.threats
+  because: >
+    A problem whose interrupt nobody handles is not testing anything. Keyed on
+    the pipe rather than on `evade`, because naming the handler would test
+    conformance to one solution instead of to the problem.
+
+- kind: preemption_after
+  id: the-reflex-displaces-deliberation
+  source: game.threats
+  because: >
+    A single job can pass a latency budget when the event lands somewhere
+    convenient in its script, but its response time is bounded by whatever else
+    it was doing, so the margin belongs to the scenario rather than to the
+    system. Requiring preemption asks what the safety case asks: can the urgent
+    thing interrupt the unhurried one, whenever it arrives?
+
+- kind: latency
+  id: the-dodge-lands-inside-the-budget
+  source: game.threats
+  action_pipe: game.controls
+  deadline: 5ms
+  because: >
+    Five token boundaries of the case's virtual clock, which is the
+    interrupt-latency budget in Transformer-OS §5.2: one boundary to stop the
+    running job, plus the prefill of the event payload. A hardware-independent
+    number, because the clock is the game's rather than a stopwatch held to
+    whichever machine is running.
+
+- kind: resumed_dirty_naming
+  id: the-pilot-is-told-the-ship-moved
+  object: ship.column
+  because: >
+    The deliberation must come back knowing what moved under it, and knowing it
+    in terms of the world rather than of the controls. `ship.column` is the
+    object the reflex changes, so a resume that does not name it is a resume the
+    job cannot act on.

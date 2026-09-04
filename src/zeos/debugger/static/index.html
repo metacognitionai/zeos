@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ZEOS debugger</title>
+<!-- One stylesheet and one script, both inlined by server.py. Nothing is fetched:
+     an exported run has to open from a filesystem with no network. -->
+<style>/*CSS*/</style>
+</head>
+<body>
+
+<header id="top">
+  <div class="titles">
+    <h1 id="case">ZEOS debugger</h1>
+    <p id="headline" class="sub"></p>
+  </div>
+  <!-- Counts of what the case declares. The three that name an edge kind are also
+       its switches: hiding a kind never moves a box, because the layout is computed
+       from the declarations rather than from what is currently shown. -->
+  <div class="badges" id="badges"></div>
+  <button id="theme" type="button" title="light / dark">&#9681;</button>
+  <!-- AGPL section 13: a debugger reached over a network must offer the people using
+       it the Corresponding Source. The offer lives in the page, not in the server, so
+       an exported run carries it as well as a served one. -->
+  <a id="source" href="https://github.com/metacognitionai/zeos" target="_blank"
+     rel="noopener noreferrer" title="ZEOS is free software under AGPL-3.0-only -- get the source">source</a>
+</header>
+
+<main>
+  <!-- The wiring diagram. Priority runs down the page, most urgent at the top,
+       because that is the axis every scheduling claim is made along. -->
+  <section id="graph">
+    <div class="pane-head">
+      <h2>wiring</h2>
+      <span class="legend" id="legend"></span>
+    </div>
+    <!-- What the lines mean. Every sample is drawn with the classes the real edges
+         carry, so the key cannot drift from the diagram it explains. -->
+    <div class="edge-key" id="edge-key"></div>
+    <div class="scroller"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  </section>
+
+  <!-- The grab handle between the diagram and the panes. A separator rather than a
+       decorative border: it takes focus and answers the arrow keys, because a width
+       only a mouse can set is a width some readers cannot. -->
+  <div id="divider" role="separator" aria-orientation="vertical" tabindex="0"
+       aria-label="resize the side panel" title="drag to resize (&larr; &rarr; when focused)"></div>
+
+  <aside id="side">
+    <section class="pane"><div class="pane-head"><h2>jobs</h2></div>
+      <div id="jobs"></div></section>
+    <section class="pane"><div class="pane-head"><h2>suspension stack</h2></div>
+      <div id="stack"></div></section>
+    <section class="pane"><div class="pane-head"><h2>pipes</h2></div>
+      <div id="pipes"></div></section>
+    <!-- The token stream. Pipes above show what is *in* a buffer at this frame;
+         this shows what has moved, in order, up to it. -->
+    <section class="pane" id="tokens-pane">
+      <div class="pane-head">
+        <h2>tokens</h2>
+        <select id="token-filter" aria-label="filter the token stream">
+          <option value="">everything</option>
+        </select>
+      </div>
+      <div id="tokens"></div></section>
+    <section class="pane"><div class="pane-head"><h2>world state</h2></div>
+      <div id="world"></div></section>
+    <section class="pane" id="faults-pane"><div class="pane-head"><h2>faults</h2></div>
+      <div id="faults"></div></section>
+    <section class="pane" id="lint-pane"><div class="pane-head"><h2>lint</h2></div>
+      <div id="lint"></div></section>
+  </aside>
+</main>
+
+<!-- The scrubber is the page's spine: one axis, and every pane above reads at the
+     sequence it names. -->
+<footer id="foot" hidden>
+  <div class="transport">
+    <button id="first" type="button" title="start (Home)">&#124;&#9664;</button>
+    <button id="prev-mark" type="button" title="previous mark (,)">&#9664;&#9664;</button>
+    <button id="prev" type="button" title="step back (&larr;)">&#9664;</button>
+    <button id="play" type="button" title="play / pause (space)">&#9654;</button>
+    <button id="next" type="button" title="step forward (&rarr;)">&#9654;</button>
+    <button id="next-mark" type="button" title="next mark (.)">&#9654;&#9654;</button>
+    <button id="last" type="button" title="end (End)">&#9654;&#124;</button>
+    <input type="range" id="slider" min="0" value="0" step="1" aria-label="journal position">
+    <output class="at" id="at">0 / 0</output>
+    <select id="marks" aria-label="jump to"><option value="">jump to&hellip;</option></select>
+    <button id="prev-tick" type="button" title="previous tick ([)">&#9664;t</button>
+    <button id="next-tick" type="button" title="next tick (])">t&#9654;</button>
+  </div>
+  <div class="strip"><svg id="timeline" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  <div class="ticker" id="ticker"></div>
+</footer>
+
+<!-- The descriptor's own file. A box in the diagram is a behaviour, and what the
+     behaviour actually says is the one thing the wiring cannot draw, so clicking a box
+     opens it. Hidden until asked for; Escape or the backdrop closes it. -->
+<div id="modal" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-name">
+    <div class="sheet-head">
+      <div>
+        <h2 id="modal-name"></h2>
+        <p id="modal-source" class="sub"></p>
+      </div>
+      <button id="modal-close" type="button" title="close (Esc)">&times;</button>
+    </div>
+    <div id="modal-declared" class="declared"></div>
+    <pre id="modal-body"></pre>
+  </div>
+</div>
+
+<p id="nojournal" class="empty" hidden>
+  No journal loaded &mdash; showing the declared wiring only.
+  Run the case with <code>--journal</code> and pass it to <code>zeos debug</code> to step through it.
+</p>
+
+<script>window.__ZEOS__ = __DATA__;</script>
+<script>/*JS*/</script>
+</body>
+</html>

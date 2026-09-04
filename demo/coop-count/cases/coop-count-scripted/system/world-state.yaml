@@ -1,0 +1,7 @@
+# How far each agent has counted. Seeded here so the objects exist from the start,
+# though seeding does not itself produce a status region: the driver writes these
+# straight into the store before any job is spawned, so nothing is alive to receive
+# the refresh. Each agent's first region appears when it first checkpoints.
+initial:
+  count.a: "0"
+  count.b: "0"

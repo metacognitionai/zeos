@@ -1,0 +1,126 @@
+[project]
+name = "zeos"
+version = "0.1.0"
+description = "ZEOS -- a transformer operating system: priority-preemptive scheduling, protected mode, and virtual context for LLM jobs"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Anton van den Hengel" },
+    { name = "Gil Avraham" },
+    { name = "Jiahao Zhang" },
+    { name = "Stephen Gould" },
+]
+requires-python = ">=3.12"
+keywords = [
+    "llm",
+    "agents",
+    "operating-system",
+    "scheduling",
+    "determinism",
+    "kernel",
+    "prompt-injection",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = [
+    # Descriptor loading only. src/zeos/core/ must remain stdlib-only -- it is the
+    # portability hedge for an eventual on-platform port. Enforced by
+    # tests/contract/test_core_is_stdlib_only.py.
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/metacognitionai/zeos"
+Documentation = "https://github.com/metacognitionai/zeos/tree/main/docs/ProjectDescription"
+Issues = "https://github.com/metacognitionai/zeos/issues"
+
+[project.scripts]
+zeos = "zeos.cli:main"
+
+[tool.uv.workspace]
+# The demos are workspace members: same venv and lockfile, but nothing from
+# demo/ ever ships in the zeos wheel.
+members = ["demo/counter", "demo/coop-count", "demo/space-invaders"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyright>=1.1.390",
+    "types-pyyaml>=6.0",
+    # Pinned exactly so local and CI formatting can never disagree.
+    "ruff==0.16.5",
+    "pre-commit>=4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zeos"]
+
+[tool.hatch.build.targets.sdist]
+# The sdist carries the demos, but not the model weights a demo downloads into
+# its own `models/`. Those are gitignored by each demo's own .gitignore, and
+# hatchling reads only the root one, so without this the sdist is gigabytes.
+exclude = [
+    "demo/*/models",
+    # Agent instructions and CI wiring belong to the repository, not to a source
+    # release: nothing in them is needed to build or read what is being shipped.
+    ".github",
+    "AGENTS.md",
+    "CLAUDE.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "determinism: replay/determinism gates (acceptance criterion 1)",
+]
+
+[tool.codespell]
+# The corpus is deliberately British English; these are spellings, not typos.
+ignore-words-list = "fulfilment,unparseable"
+# Minified vendored assets are not prose.
+skip = "*.min.js,*.min.css"
+
+[tool.ruff]
+# The only formatter and linter for this repository.
+required-version = "==0.16.5"
+target-version = "py312"
+line-length = 100
+# Markdown is prose. Ruff reformats the Python inside fenced blocks, and the
+# corpus aligns those blocks by hand to set MEASURED against SYNTHETIC.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The machine contract requires a destroyed context to raise; which exception
+# type is the backend's business, so the blind pytest.raises is deliberate.
+"tests/contract/test_machine_contract.py" = ["B017"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false

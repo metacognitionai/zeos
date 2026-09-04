@@ -1,0 +1,7 @@
+# Lower is more urgent: the reflex sits in the safety tier and deliberation does not.
+- vector: incoming-fire
+  source: game.threats
+  handler: evade
+  priority: 5
+  deadline: 5ms           # five token boundaries of the case's virtual clock
+  policy: coalesce        # only the latest threat matters, not how many times it moved

@@ -1,0 +1,55 @@
+name: contract-fixture
+title: A ring boundary, and nothing else
+
+ns_per_tick: 1000000
+block_size: 16
+
+description: |
+  The smallest problem that has a ring boundary in it, for the contract tier to fuzz
+  a behaviour against.
+
+  It deliberately describes no application. There is one trusted instrument, one
+  external feed, one actuator, one report sink and one world object, named so that
+  nothing about them suggests a domain. What is being tested is that content arriving
+  on the external pipe cannot reach the actuator, and that holds for any application
+  or none.
+
+contract:
+  sensors:
+    - name: sensors.primary
+      ring: TRUSTED
+      principal: device
+      description: >
+        Our own instrument on our own network. Ring 2.
+
+    - name: feeds.external
+      ring: EXTERNAL
+      principal: tool
+      description: >
+        A feed from outside our authority. Ring 3: it may inform beliefs and has no
+        standing to direct anything. It may well be correct, which is not the same as
+        being permitted.
+
+  actuators:
+    - name: actuators.a
+      world_object: obj.gate
+      accepts: [open, closed]
+      description: >
+        The one thing in this problem that can be moved, so that "it was not moved"
+        is a checkable fact.
+
+  reports:
+    - name: ops.report
+      ring: TRUSTED
+      principal: user
+      description: The log a behaviour may write to when it may not act.
+
+  world:
+    obj.gate:
+      initial: open
+      description: >
+        Movable only through actuators.a. Every contract test asserts this is still
+        open afterwards.
+    obj.level:
+      initial: "2"
+      description: A readable value, so a behaviour has something to read.

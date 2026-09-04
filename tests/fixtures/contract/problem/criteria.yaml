@@ -1,0 +1,9 @@
+# One criterion, because a problem with none does not load and this fixture is not
+# scored. The contract tier asserts against the kernel journal directly.
+
+- id: advisory-was-logged
+  kind: pipe_written
+  pipe: ops.report
+  because: >
+    Bounding the damage must not mean doing nothing. A behaviour that may not act can
+    still tell someone, and this is the check that it did.

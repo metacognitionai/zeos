@@ -1,0 +1,39 @@
+# Three vectors, and two of them are the application rather than the interrupt.
+#
+# `hand-to-b` and `hand-to-a` make the counters into each other's handlers. A write to
+# `count.a2b` spawns counter-b; counter-b's write to `count.b2a` spawns counter-a. Each
+# job counts one segment and exits, so a "turn" is a whole job lifetime.
+#
+# Two properties come free from that, and both were hard in the pipe-driven case.
+#
+# A job exists only because it was woken, so it can never be dispatched holding a status
+# line with nothing to act on -- the startup problem that `pinned: true` exists to solve
+# in `cases/coop-count-pipe/` cannot arise here.
+#
+# And the payload that fired the vector is consumed and injected into the job it spawns,
+# so nothing is left queued behind for a later read to pick up.
+#
+# `policy: queue` serialises: a firing that arrives while an instance of that handler is
+# still alive waits rather than spawning a second one. With one job per turn there is
+# never more than one, but the guarantee is what keeps it that way under an interrupt.
+
+- vector: hand-to-b
+  source: count.a2b
+  handler: counter-b
+  priority: 50
+  policy: queue
+
+- vector: hand-to-a
+  source: count.b2a
+  handler: counter-a
+  priority: 50
+  policy: queue
+
+# The interrupt, unchanged from the pipe-driven case: priority 5 outranks both counters,
+# so it preempts whichever is mid-turn.
+- vector: keyboard-interrupt
+  source: keys.interrupt
+  handler: reset-count
+  priority: 5
+  policy: queue
+  deadline: 500ms

@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zeos-space-invaders"
+version = "0.1.0"
+description = "A real-time game a served model is too slow to play, scheduled by the ZEOS kernel"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "zeos",
+]
+
+[project.optional-dependencies]
+# One SDK per backend, neither installed by default: `--player random`, `play`
+# and the whole test suite need neither, and a run only ever reaches one of
+# them. The extra names match the `--player` names on purpose.
+claude = ["anthropic>=0.125"]
+openai = ["openai>=1.0"]
+all = ["zeos-space-invaders[claude,openai]"]
+
+[dependency-groups]
+# A group, not an extra: uv sync installs it by default.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[tool.uv.sources]
+# A workspace member like the other demos (`demo/README.md`): one venv and one
+# lockfile at the repository root, and a checkout is enough to run it.
+zeos = { workspace = true }
+
+[project.scripts]
+play = "zeos_space_invaders.play:main"
+agent = "zeos_space_invaders.cli:main"
+compare = "zeos_space_invaders.compare:main"
+viewer = "zeos_space_invaders.viewer:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zeos_space_invaders"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Coverage is on by every run rather than a separate command, because a floor
+# nobody measures is not a floor. `--no-cov` skips it while iterating.
+addopts = "--cov --cov-report=term-missing:skip-covered"
+
+[tool.coverage.run]
+source = ["src/zeos_space_invaders"]
+
+[tool.coverage.report]
+#: The floor, and it stays at 90. Coverage runs well above it -- that headroom
+#: is for a new module landing with its tests rather than for the number to
+#: chase. Never lower it to make a commit pass: write the test instead.
+fail_under = 90
+exclude_also = [
+    # The console scripts are the entry points; this branch only fires when a
+    # module is run directly, which no test does.
+    'if __name__ == "__main__":',
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import order
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "SIM",      # simplify
+    "RUF",      # ruff's own
+]

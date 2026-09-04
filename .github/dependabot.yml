@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # Ruff is pinned in three places that must move together (the dev group,
+      # [tool.ruff] required-version, and the pre-commit rev); a lone bump here
+      # would only desync them. Ruff bumps are deliberate and manual.
+      - dependency-name: ruff
