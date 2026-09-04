@@ -1,6 +1,6 @@
 [project]
 name = "zeos"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "ZEOS -- a transformer operating system: priority-preemptive scheduling, protected mode, and virtual context for LLM jobs"
 readme = "README.md"
 license = "AGPL-3.0-only"
