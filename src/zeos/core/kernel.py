@@ -3094,6 +3094,7 @@ class Kernel:
                             policy=f"cancel-below:{policy.depth}",
                         )
                     )
+                    self._release_held_resources(cancelled)
             case OnComplete.REPLACE_WITH:
                 for cancelled in self.sched.clear_stack():
                     self._transition(cancelled, JobState.DONE)
@@ -3105,6 +3106,7 @@ class Kernel:
                             policy="replace-with",
                         )
                     )
+                    self._release_held_resources(cancelled)
                 if policy.replacement is not None:
                     self.spawn(policy.replacement)
 
