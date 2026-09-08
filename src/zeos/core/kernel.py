@@ -2452,6 +2452,34 @@ class Kernel:
         a gate owned by the job it is guarding could be cancelled by it.
         """
         rendered = render(payload)
+        requests = self.pipes.ensure(gate.requests)
+        asked = tokens_from_text(rendered)
+        if len(asked) > requests.spec.capacity_tokens:
+            self._refuse_gate(
+                job,
+                gate,
+                payload,
+                then_read,
+                reason=(
+                    f"an action of {len(asked)} tokens cannot reach the guard through "
+                    f"{gate.requests}, which holds {requests.spec.capacity_tokens}"
+                ),
+            )
+            return
+        if not requests.writable(len(asked)):
+            job.pending_write = (gate.pipe, tuple(payload), then_read)
+            requests.block_writer(job.job_id)
+            self._block(job)
+            job.blocked_on = gate.pipe
+            job.blocked_reason = "gate-queue"
+            self._transition(job, JobState.BLOCKED)
+            self._emit(
+                JobBlocked(
+                    clock=self.clock, job=job.job_id, pipe=gate.requests, reason="gate-queue"
+                )
+            )
+            return
+
         gate_job = self.spawn(gate.descriptor, owner=KERNEL_PRINCIPAL)
         request = GateRequest(
             job=job.job_id,
@@ -2468,8 +2496,6 @@ class Kernel:
         # rather than through `_do_write` is deliberate: the kernel is the one
         # informing the gate, and routing it through the capability check would ask
         # whether the *kernel* may write to the gate's own request pipe.
-        requests = self.pipes.ensure(gate.requests)
-        asked = tokens_from_text(rendered)
         accepted = requests.write(asked)
         self._emit(
             PipeWritten(
@@ -2495,6 +2521,42 @@ class Kernel:
                 gate_job=gate_job.job_id,
                 payload=rendered,
             )
+        )
+
+    def _refuse_gate(
+        self,
+        job: Job,
+        gate: GateSpec,
+        payload: Sequence[Token],
+        then_read: PipeName | None,
+        *,
+        reason: str,
+    ) -> None:
+        """The guard cannot be asked. Its failure policy decides, as for a guard that
+        never answers."""
+        allowed = gate.on_gate_failure == ALLOW
+        self._emit(
+            GateAnswered(
+                clock=self.clock,
+                job=job.job_id,
+                pipe=gate.pipe,
+                gate=gate.descriptor,
+                allowed=allowed,
+                reason=f"{reason}; applying {gate.on_gate_failure}",
+            )
+        )
+        if allowed:
+            job.gate_cleared = gate.pipe
+            self._do_write(job, gate.pipe, payload, then_read=then_read)
+            return
+        self._raise_fault(
+            job,
+            Fault(
+                kind=FaultKind.GATE,
+                job=job.job_id,
+                detail=f"{gate.descriptor} could not judge the write to {gate.pipe}: {reason}",
+                pipe=gate.pipe,
+            ),
         )
 
     def _resolve_verdict(self, gate_job: Job, gate: GateSpec, text: str) -> None:
