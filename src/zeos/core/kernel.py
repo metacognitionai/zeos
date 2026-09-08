@@ -1165,12 +1165,12 @@ class Kernel:
                 if request.op is OpKind.READ:
                     self._do_read(job, target)
                 else:
-                    self._do_write(job, target, request.payload)
-                    # The read half commits only if the write half did: a refused
-                    # capability or an actuation parked at its gate must leave the job
-                    # where it was, not blocked on a read it never reached.
-                    if read_after_write is not None and job.state is JobState.RUNNING:
-                        self._do_read(job, self._resolve_pipe(job, read_after_write))
+                    then_read = (
+                        None
+                        if read_after_write is None
+                        else self._resolve_pipe(job, read_after_write)
+                    )
+                    self._do_write(job, target, request.payload, then_read=then_read)
             case OpKind.SELECT:
                 self._do_select(job, tuple(self._resolve_pipe(job, p) for p in request.pipes))
             case OpKind.ACQUIRE:
@@ -2262,7 +2262,14 @@ class Kernel:
                 )
             )
 
-    def _do_write(self, job: Job, pipe_name: PipeName, payload: Sequence[Token]) -> None:
+    def _do_write(
+        self,
+        job: Job,
+        pipe_name: PipeName,
+        payload: Sequence[Token],
+        *,
+        then_read: PipeName | None = None,
+    ) -> None:
         pipe = self.pipes.ensure(pipe_name)
 
         # Effects are syscalls. This check is the enforcement floor that
@@ -2319,7 +2326,7 @@ class Kernel:
             and job.gate_cleared != pipe_name
             and job.name != gate.descriptor
         ):
-            self._consult_gate(job, gate, payload)
+            self._consult_gate(job, gate, payload, then_read)
             return
 
         # An actuator has no backlog to fill (see ``Pipe.latch``), so it never applies
@@ -2328,7 +2335,7 @@ class Kernel:
         if not pipe.spec.world_object and not pipe.writable(len(payload)):
             # All-or-nothing: a partial write would tear the payload, and dropping
             # the remainder would lose data. Park it and retry on wake.
-            job.pending_write = (pipe_name, tuple(payload))
+            job.pending_write = (pipe_name, tuple(payload), then_read)
             pipe.block_writer(job.job_id)
             self._block(job)
             job.blocked_on = pipe_name
@@ -2362,6 +2369,7 @@ class Kernel:
         if self._carried_by_link(pipe_name):
             self._send_over_link(job, pipe_name, payload)
             job.gate_cleared = None
+            self._read_after_write(job, then_read)
             return
 
         latched = bool(pipe.spec.world_object)
@@ -2385,6 +2393,11 @@ class Kernel:
             job.record_write(ObjectSet.of([pipe.spec.world_object]))
         self._wake_readers(pipe_name)
         self._fire_vectors(pipe_name)
+        self._read_after_write(job, then_read)
+
+    def _read_after_write(self, job: Job, then_read: PipeName | None) -> None:
+        if then_read is not None and job.state is JobState.RUNNING:
+            self._do_read(job, then_read)
 
     def _maybe_endorse(self, job: Job, pipe_name: PipeName) -> None:
         """Record an endorsement when a dirty job writes cleanly through a schema.
@@ -2421,7 +2434,13 @@ class Kernel:
 
     # -- action gates -----------------------------------------------
 
-    def _consult_gate(self, job: Job, gate: GateSpec, payload: Sequence[Token]) -> None:
+    def _consult_gate(
+        self,
+        job: Job,
+        gate: GateSpec,
+        payload: Sequence[Token],
+        then_read: PipeName | None = None,
+    ) -> None:
         """Hold an actuation and spawn its guard.
 
         The guard is an ordinary job -- budgeted, schedulable, journaled -- which is
@@ -2440,7 +2459,7 @@ class Kernel:
             deadline=self.clock.token_clock + gate.timeout_ticks,
         )
         job.pending_gate = request
-        job.pending_write = (gate.pipe, tuple(payload))
+        job.pending_write = (gate.pipe, tuple(payload), then_read)
 
         # The guard reads the intended action from its stdin. Writing it directly
         # rather than through `_do_write` is deliberate: the kernel is the one
@@ -2572,7 +2591,7 @@ class Kernel:
             self._do_acquire(job, name)
             return True
         if job.pending_write is not None:
-            pipe_name, payload = job.pending_write
+            pipe_name, payload, then_read = job.pending_write
             pipe = self.pipes.get(pipe_name)
             tokens = tuple(t for t in payload if isinstance(t, Token))
             if not pipe.writable(len(tokens)):
@@ -2581,23 +2600,20 @@ class Kernel:
                 self._transition(job, JobState.BLOCKED)
                 return True
             job.pending_write = None
-            self._do_write(job, pipe_name, tokens)
+            self._do_write(job, pipe_name, tokens, then_read=then_read)
             return True
         if job.pending_select:
             names = job.pending_select
             job.pending_select = ()
             for name in names:
                 self.pipes.get(name).unblock(job.job_id)
-            readable = [n for n in sorted(names) if self.pipes.get(n).readable]
-            if readable:
-                self._consume_read(job, readable[0])
-                return True
+            self._do_select(job, names)
+            return True
         if job.pending_read is not None:
             pipe_name = job.pending_read
             job.pending_read = None
-            if self.pipes.get(pipe_name).readable:
-                self._consume_read(job, pipe_name)
-                return True
+            self._do_read(job, pipe_name)
+            return True
         return False
 
     def _wake_readers(self, pipe_name: PipeName) -> None:

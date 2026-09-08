@@ -92,7 +92,7 @@ class Job:
     #: A pipe operation the job started but could not complete, retried when it
     #: wakes. Without this a backpressured write would have to be either dropped
     #: (data loss) or partially applied (torn payload) -- both worse than parking it.
-    pending_write: tuple[PipeName, tuple[object, ...]] | None = None
+    pending_write: tuple[PipeName, tuple[object, ...], PipeName | None] | None = None
     #: A blocking READ the job is parked on, completed when it wakes. It has to be
     #: its own field rather than being recovered from ``blocked_on`` /
     #: ``blocked_reason``, because ``Scheduler.wake`` clears both on the way out of
