@@ -29,6 +29,7 @@ decode of the preempted job may occur -- and in practice, zero.
 from __future__ import annotations
 
 import math
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -255,6 +256,9 @@ class KernelConfig:
     theta_read: float = DEFAULT_THETA_READ
     #: EMA horizon in blocks for the attention reference signal.
     tau_blocks: float = 8.0
+    #: Print every ``Decoded`` event to stderr as it is journalled. A debugging
+    #: aid only; the journal is the record.
+    trace_decode: bool = False
 
 
 @dataclass
@@ -321,6 +325,12 @@ class Kernel:
 
     def _emit(self, event: Event) -> None:
         self._events.append(event)
+        if self.config.trace_decode and isinstance(event, Decoded):
+            print(
+                f"[t={event.clock.token_clock}] job {event.job} seg {event.segment}: "
+                + " ".join(event.text),
+                file=sys.stderr,
+            )
 
     def _transition(self, job: Job, to: JobState) -> None:
         before = job.state
