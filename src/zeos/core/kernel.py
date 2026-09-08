@@ -1711,17 +1711,7 @@ class Kernel:
                 policy=reason,
             )
         )
-        lease = self.leases.lease_of(job.job_id)
-        if lease is not None:
-            self.leases.revoke(lease.platform)
-            self._emit(
-                Disembodied(
-                    clock=self.clock,
-                    job=job.job_id,
-                    platform=lease.platform,
-                    reason=reason,
-                )
-            )
+        self._return_body(job, reason=reason)
         self._release_held_resources(job)
 
     # -- the link (ZEOS-Distributed) ------------------------------------------
@@ -2043,6 +2033,20 @@ class Kernel:
                 woken = candidate
                 self._transition(waiter, JobState.READY)
         self._emit(ResourceReleased(clock=self.clock, job=job.job_id, resource=name, woke=woken))
+
+    def _return_body(self, job: Job, *, reason: str) -> None:
+        lease = self.leases.lease_of(job.job_id)
+        if lease is None:
+            return
+        self.leases.revoke(lease.platform)
+        self._emit(
+            Disembodied(
+                clock=self.clock,
+                job=job.job_id,
+                platform=lease.platform,
+                reason=reason,
+            )
+        )
 
     def _release_held_resources(self, job: Job) -> None:
         """Give back everything a terminal job holds.
@@ -3047,17 +3051,7 @@ class Kernel:
         self.sched.yield_running()
         self._transition(job, JobState.DONE)
         self._emit(JobCompleted(clock=self.clock, job=job.job_id, tokens_used=job.tokens_used))
-        lease = self.leases.lease_of(job.job_id)
-        if lease is not None:
-            self.leases.revoke(lease.platform)
-            self._emit(
-                Disembodied(
-                    clock=self.clock,
-                    job=job.job_id,
-                    platform=lease.platform,
-                    reason="job completed",
-                )
-            )
+        self._return_body(job, reason="job completed")
         self._release_held_resources(job)
         self._apply_completion_policy(job)
         # The context is deliberately *not* destroyed. The transcript is the
@@ -3144,6 +3138,7 @@ class Kernel:
                 if self.sched.running is job:
                     self.sched.yield_running()
                 self._transition(job, JobState.FAULTED)
+                self._return_body(job, reason="job faulted")
                 self._release_held_resources(job)
             case FaultAction.DISPATCH_HANDLER:
                 self._inject_kernel(job, resolution.notice)
