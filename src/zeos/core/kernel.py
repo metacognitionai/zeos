@@ -2021,6 +2021,9 @@ class Kernel:
             )
             if victim.job_id == job.job_id:
                 return
+            if victim.state.is_terminal:
+                self._do_acquire(job, name)
+                return
 
         resource.add_waiter(job.job_id)
         job.pending_acquire = name
