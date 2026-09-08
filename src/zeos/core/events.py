@@ -234,6 +234,8 @@ class JobResumed(Event):
     resume_kind: ResumeKind  # not ``kind``: that name belongs to the record envelope
     suspended_ns: int
     dirty: tuple[StateDelta, ...] = ()
+    #: The job was blocked, waiting for something it asked for, rather than displaced.
+    waited: bool = False
 
 
 @event_class

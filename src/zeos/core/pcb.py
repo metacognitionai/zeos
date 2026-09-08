@@ -82,6 +82,8 @@ class Job:
     #: Clock at which the job was suspended, for the "suspended 94s" line and for
     #: computing which writes landed while it was gone.
     suspended_at: Clock | None = None
+    #: Clock at which the job blocked, the baseline for what moved while it waited.
+    blocked_at: Clock | None = None
     preempt_count: int = 0
 
     observed_reads: ObjectSet = field(default_factory=ObjectSet)

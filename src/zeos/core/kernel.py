@@ -214,7 +214,9 @@ from zeos.world.store import ObjectSet, WorldStore
 __all__ = ["Kernel", "KernelConfig", "KernelError", "render_resume_notice"]
 
 
-def render_resume_notice(suspended_ns: int, dirty: Sequence[StateDelta]) -> str:
+def render_resume_notice(
+    suspended_ns: int, dirty: Sequence[StateDelta], *, waited: bool = False
+) -> str:
     """The text a resumed job actually reads, rendered only when something changed.
 
     Public because it is behaviour, not presentation: a bare flag is not enough --
@@ -225,7 +227,7 @@ def render_resume_notice(suspended_ns: int, dirty: Sequence[StateDelta]) -> str:
     """
     lines = [
         "<RESUME>",
-        f"Suspended {format_duration(suspended_ns)}.",
+        f"{'Waited' if waited else 'Suspended'} {format_duration(suspended_ns)}.",
         "Changed state you depend on:",
     ]
     lines.extend(
@@ -672,13 +674,18 @@ class Kernel:
         # into an unfamiliar machine -- the precise failure the Fleet design warns about.
         # `suspended_at` is the marker, so a job that suspends, blocks waiting for
         # a body, and is later woken still gets its notice.
-        if job.suspended_at is not None:
+        if job.suspended_at is not None or job.blocked_at is not None:
             self._resume(job)
         if not job.started:
             self._start_job(job)
             return True
 
         return self._decode_once(job)
+
+    def _block(self, job: Job) -> None:
+        self.sched.block(job)
+        if job.blocked_at is None:
+            job.blocked_at = self.clock
 
     def _dispatch_next(self) -> None:
         """Pick what runs when nothing is, from the ready set *and* the stack.
@@ -770,20 +777,23 @@ class Kernel:
             )
 
     def _resume(self, job: Job) -> None:
-        """Pop off the stack and tell the job what changed underneath it.
+        """Bring back a job that was suspended or blocked, and tell it what changed
+        underneath it.
 
         This is the one genuinely new problem (core §6.2): a classical OS restores
         registers and the process never knows it was gone, but a ZEOS job's saved
         state contains *beliefs about the world*, and the world moved.
         """
-        since = job.suspended_at or job.spawned_at
+        marks = [c for c in (job.suspended_at, job.blocked_at) if c is not None]
+        since = min(marks, key=lambda c: c.token_clock) if marks else job.spawned_at
+        waited = job.suspended_at is None
         dirty = self.world.dirty_for(job.effective_reads, since=since, exclude_job=job.job_id)
         suspended_ns = self.clock.elapsed_ns_since(since)
         kind = ResumeKind.CLEAN if not dirty else ResumeKind.DIRTY
         # A resume that changed nothing is not news: the job's beliefs are exactly as
         # it left them, so it is told nothing and the journal keeps the record.
         if dirty:
-            self._inject_kernel(job, render_resume_notice(suspended_ns, dirty))
+            self._inject_kernel(job, render_resume_notice(suspended_ns, dirty, waited=waited))
         self._emit(
             JobResumed(
                 clock=self.clock,
@@ -791,9 +801,11 @@ class Kernel:
                 resume_kind=kind,
                 suspended_ns=suspended_ns,
                 dirty=dirty,
+                waited=waited,
             )
         )
         job.suspended_at = None
+        job.blocked_at = None
 
     # -- machine interaction -------------------------------------------------
 
@@ -1190,7 +1202,7 @@ class Kernel:
         pipe = self.pipes.ensure(pipe_name)
         if not pipe.readable:
             pipe.block_reader(job.job_id)
-            self.sched.block(job)
+            self._block(job)
             job.pending_read = pipe_name
             job.blocked_on = pipe_name
             job.blocked_reason = "read-empty"
@@ -2012,7 +2024,7 @@ class Kernel:
 
         resource.add_waiter(job.job_id)
         job.pending_acquire = name
-        self.sched.block(job)
+        self._block(job)
         job.blocked_reason = "resource"
         self._transition(job, JobState.BLOCKED)
         self._emit(
@@ -2318,7 +2330,7 @@ class Kernel:
             # the remainder would lose data. Park it and retry on wake.
             job.pending_write = (pipe_name, tuple(payload))
             pipe.block_writer(job.job_id)
-            self.sched.block(job)
+            self._block(job)
             job.blocked_on = pipe_name
             job.blocked_reason = "write-full"
             self._emit(
@@ -2448,7 +2460,7 @@ class Kernel:
         )
         self._wake_readers(gate.requests)
 
-        self.sched.block(job)
+        self._block(job)
         job.blocked_on = gate.pipe
         job.blocked_reason = "gate"
         self._transition(job, JobState.BLOCKED)
@@ -2534,7 +2546,7 @@ class Kernel:
         for name in sorted(pipe_names):
             self.pipes.ensure(name).block_reader(job.job_id)
         job.pending_select = pipe_names
-        self.sched.block(job)
+        self._block(job)
         job.blocked_on = pipe_names[0] if pipe_names else PipeName("")
         job.blocked_reason = "select"
         self._emit(
@@ -2565,7 +2577,7 @@ class Kernel:
             tokens = tuple(t for t in payload if isinstance(t, Token))
             if not pipe.writable(len(tokens)):
                 pipe.block_writer(job.job_id)
-                self.sched.block(job)
+                self._block(job)
                 self._transition(job, JobState.BLOCKED)
                 return True
             job.pending_write = None
