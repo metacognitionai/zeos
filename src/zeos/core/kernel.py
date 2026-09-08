@@ -335,6 +335,8 @@ class Kernel:
             # Every terminal transition passes through here, so this is the one place
             # the invariant can be stated once.
             self.sched.drop_from_stack(job.job_id)
+            if job.vector is not None:
+                self.vectors.mark_complete(job.vector)
         self._emit(
             JobStateChanged(clock=self.clock, job=job.job_id, from_state=before, to_state=to)
         )
@@ -1721,8 +1723,6 @@ class Kernel:
                 )
             )
         self._release_held_resources(job)
-        if job.vector is not None:
-            self.vectors.mark_complete(job.vector)
 
     # -- the link (ZEOS-Distributed) ------------------------------------------
 
@@ -3059,8 +3059,6 @@ class Kernel:
                 )
             )
         self._release_held_resources(job)
-        if job.vector is not None:
-            self.vectors.mark_complete(job.vector)
         self._apply_completion_policy(job)
         # The context is deliberately *not* destroyed. The transcript is the
         # source of truth (core §2.1), and a completed job's transcript is
