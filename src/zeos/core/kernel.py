@@ -641,7 +641,13 @@ class Kernel:
             )
         )
         if pipe.spec.world_object:
-            self._apply_world_write(pipe.spec.world_object, text, by=None)
+            self._apply_world_write(
+                pipe.spec.world_object,
+                text,
+                by=None,
+                ring=pipe.spec.ring,
+                principal=pipe.spec.principal,
+            )
         self._wake_readers(pipe_name)
         self._fire_vectors(pipe_name)
 
@@ -2455,7 +2461,13 @@ class Kernel:
         )
         self._maybe_endorse(job, pipe_name)
         if pipe.spec.world_object:
-            self._apply_world_write(pipe.spec.world_object, render(payload), by=job.job_id)
+            self._apply_world_write(
+                pipe.spec.world_object,
+                render(payload),
+                by=job.job_id,
+                ring=pipe.spec.ring,
+                principal=pipe.spec.principal,
+            )
             job.record_write(ObjectSet.of([pipe.spec.world_object]))
         self._wake_readers(pipe_name)
         self._fire_vectors(pipe_name)
@@ -2790,9 +2802,24 @@ class Kernel:
             )
 
     def _apply_world_write(
-        self, obj_name: str, value: str, *, by: JobId | None, note: str = ""
+        self,
+        obj_name: str,
+        value: str,
+        *,
+        by: JobId | None,
+        note: str = "",
+        ring: Ring = Ring.KERNEL,
+        principal: Principal = Principal.KERNEL,
     ) -> None:
-        write = self.world.set(ObjectName(obj_name), value, at=self.clock, by=by, note=note)
+        write = self.world.set(
+            ObjectName(obj_name),
+            value,
+            at=self.clock,
+            by=by,
+            note=note,
+            ring=ring,
+            principal=principal,
+        )
         if write is not None:
             self._emit(
                 WorldWritten(
@@ -3043,13 +3070,15 @@ class Kernel:
     def _refresh_status_region(self, job: Job, obj: ObjectName) -> None:
         self._retire_status_region(job, obj)
         tokens = tokens_from_text(f"<STATUS {obj}> {self.world.get(obj, '(unset)')} </STATUS>")
+        # The frame is the kernel's; the value inside it is not, so it keeps its ring (MP §4).
+        ring, principal = self.world.provenance_of(obj)
         segment = self._inject(
             job,
             tokens,
             pipe=KERNEL_PIPE,
-            principal=Principal.KERNEL,
-            ring=Ring.KERNEL,
-            integrity=Integrity(0),
+            principal=principal,
+            ring=ring,
+            integrity=Integrity(int(ring)),
             tag=map_tag(obj),
             perms=Perm.R | Perm.W,
         )

@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 from zeos.core.clock import Clock, format_duration
 from zeos.core.events import StateDelta
-from zeos.core.ids import JobId, ObjectName
+from zeos.core.ids import JobId, ObjectName, Principal, Ring
 
 __all__ = ["ObjectSet", "Write", "WorldStore"]
 
@@ -122,6 +122,11 @@ class Write:
     #: Why this write matters when the value alone does not say so. A write with a
     #: note is never idempotent, however equal the values.
     note: str = ""
+    #: Where the value came from. A sensor's reading is EXTERNAL/DEVICE however the
+    #: kernel later renders it; kernel-authored state (a lease fact, a link state) is
+    #: KERNEL. The default suits an internal write; device paths pass the pipe's own.
+    ring: Ring = Ring.KERNEL
+    principal: Principal = Principal.KERNEL
 
 
 @dataclass
@@ -160,6 +165,8 @@ class WorldStore:
         at: Clock,
         by: JobId | None = None,
         note: str = "",
+        ring: Ring = Ring.KERNEL,
+        principal: Principal = Principal.KERNEL,
     ) -> Write | None:
         """Apply a write. Returns the record, or ``None`` if nothing material changed.
 
@@ -176,9 +183,31 @@ class WorldStore:
         if before == value and not note:
             return None
         self.values[obj] = value
-        record = Write(obj=obj, before=before, after=value, at=at, by=by, note=note)
+        record = Write(
+            obj=obj,
+            before=before,
+            after=value,
+            at=at,
+            by=by,
+            note=note,
+            ring=ring,
+            principal=principal,
+        )
         self.history.append(record)
         return record
+
+    def provenance_of(self, obj: ObjectName) -> tuple[Ring, Principal]:
+        """The ring and principal of the last write to ``obj``.
+
+        This is what a status region is stamped with, so a device's reading keeps the
+        device's ring wherever the kernel renders it -- rather than borrowing the
+        kernel's authority from the fact that the kernel drew the frame around it. An
+        object with no recorded write is treated as kernel state.
+        """
+        for record in reversed(self.history):
+            if record.obj == obj:
+                return record.ring, record.principal
+        return Ring.KERNEL, Principal.KERNEL
 
     def mark_synced(self, obj: ObjectName, *, at: Clock) -> None:
         """Record that a replica of ``obj`` is fresh as of ``at``."""
