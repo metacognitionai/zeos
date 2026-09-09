@@ -63,6 +63,7 @@ from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, JournalRecord
 from zeos.machine.scripted import PAD_TOKEN, Script, ScriptedMachine
 from zeos.monitor.state import MARKED_KINDS, fold
+from zeos.trace import RawTrace, replay_trace
 from zeos.world.store import WorldStore
 
 SMOKE = Path(__file__).resolve().parents[1] / "fixtures" / "smoke"
@@ -594,3 +595,39 @@ def test_a_fork_copies_the_parents_window_before_the_childs_perms_apply() -> Non
     assert [r["text"] for r in windows[2]["regions"]] == [["secret"], ["granted"]]
     assert windows[2]["regions"][0]["perms"] == Perm.NONE.value
     assert windows[1]["regions"][0]["perms"] is None, "the parent's own copy is untouched"
+
+
+# --- the machine trace ---------------------------------------------------------
+
+
+def test_the_trace_is_absent_unless_one_was_written(records: Sequence[JournalRecord]) -> None:
+    """``None`` and ``[]`` mean different things to the page: no machine view to
+    offer, and a machine that had nothing to say."""
+    assert frames(records)["trace"] is None
+    assert frames(records, trace=[])["trace"] == []
+    assert frames([], trace=[])["trace"] == []
+
+
+def _sampled(kernel: Kernel) -> RawTrace:
+    trace = RawTrace()
+    trace.sample(kernel.machine, kernel.events, 0)  # pyright: ignore[reportArgumentType]
+    return trace
+
+
+def test_the_trace_is_re_keyed_to_frames_and_otherwise_carried_whole(
+    kernel: Kernel, records: Sequence[JournalRecord]
+) -> None:
+    """Replaying the re-keyed rows gives the same account as replaying the file."""
+    rows = _sampled(kernel).rows
+    built = frames(records, trace=rows)["trace"]
+    assert [row[0] for row in built] == sorted(row[0] for row in built)
+    assert all(0 <= row[0] < frames(records)["count"] for row in built)
+    keys = ("seq", "job", "kv_resident", "from_word", "words", "trailing")
+    assert replay_trace([dict(zip(keys, row, strict=True)) for row in built]) == replay_trace(rows)
+
+
+def test_decimation_keeps_every_trace_row(kernel: Kernel, records: Sequence[JournalRecord]) -> None:
+    rows = _sampled(kernel).rows
+    coarse = frames(records, every=8, trace=rows)
+    assert len(coarse["trace"]) == len(rows)
+    assert all(0 <= row[0] < coarse["count"] for row in coarse["trace"])

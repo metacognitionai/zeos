@@ -78,7 +78,8 @@
   var tokenFilter = "";
   var contextJob = "";
   var folded = {};
-  var keyframes = [], ctxKeyframes = [], nodes = {}, chips = {}, objects = {};
+  var rawOn = false;
+  var keyframes = [], ctxKeyframes = [], rawKeyframes = [], nodes = {}, chips = {}, objects = {};
   var playing = false, timer = null;
 
   /* Which edge kinds are drawn. Layout ignores this entirely -- see buildLayout --
@@ -417,6 +418,23 @@
 
   function windowsAt(index) {
     return replayLog(F ? (F.contexts || []) : [], ctxKeyframes, applyContextOp, index);
+  }
+
+  /* The mirror of trace.replay_trace. */
+  function applyTraceRow(accounts, row) {
+    var job = row[1];
+    if (!accounts[job]) accounts[job] = { words: [], trailing: [], kv: 0, tokens: 0, last: null };
+    var held = accounts[job];
+    held.words = held.words.slice(0, row[3]).concat(row[4]);
+    held.trailing = row[5];
+    held.kv = row[2];
+    held.tokens = row[5].length;
+    held.words.forEach(function (w) { held.tokens += w.pieces.length + w.framing.length; });
+    held.last = [row[0], row[3]];
+  }
+
+  function accountsAt(index) {
+    return replayLog(F ? (F.trace || []) : [], rawKeyframes, applyTraceRow, index);
   }
 
   function jobsOf(name) {
@@ -1169,9 +1187,46 @@
     if (region.kind === "stub") {
       return region.count + " tokens of <STUB> framing and summary standing for segment " +
         region.stub_of + (region.store ? ", content in store " + region.store : "") +
-        " -- the journal records the size, not the text";
+        " -- the journal records the size, not the text; the model view has it";
     }
     return region.count + " \u00d7 pad, owned by no segment";
+  }
+
+  /* Whitespace inside a piece is shown as a glyph, so a pad token is a visible chip. */
+  function pieceChip(text, framing, changed) {
+    var shown = text.replace(/\n/g, "\u23ce").replace(/ /g, "\u2423").replace(/\t/g, "\u21e5");
+    return el("code", "piece" + (framing ? " framing" : "") + (changed ? " now" : ""), shown);
+  }
+
+  function drawAccount(host, account) {
+    var stream = el("div", "raw-stream");
+    var changedFrom = account.last && account.last[0] === at ? account.last[1] : Infinity;
+    var seen = 0, edgeDrawn = false, lit = null;
+    var waiting = account.tokens - account.kv;
+    function place(text, framing, changed) {
+      if (!edgeDrawn && seen === account.kv && waiting > 0) {
+        stream.appendChild(el("span", "kv-edge",
+          "KV cache ends here \u2014 " + waiting + " model tokens await prefill"));
+        edgeDrawn = true;
+      }
+      var chip = pieceChip(text, framing, changed);
+      if (changed && !lit) lit = chip;
+      stream.appendChild(chip);
+      seen++;
+    }
+    account.words.forEach(function (word, index) {
+      var changed = index >= changedFrom;
+      word.framing.forEach(function (t) { place(t, true, changed); });
+      word.pieces.forEach(function (t) { place(t, false, changed); });
+    });
+    account.trailing.forEach(function (t) { place(t, true, changedFrom !== Infinity); });
+    if (!edgeDrawn) {
+      stream.appendChild(el("span", "kv-edge cached", waiting > 0
+        ? "KV cache ends here \u2014 " + waiting + " model tokens await prefill"
+        : "every model token has a forward pass behind it"));
+    }
+    host.appendChild(stream);
+    if (lit) lit.scrollIntoView({ block: "nearest" });
   }
 
   function drawContext() {
@@ -1192,10 +1247,16 @@
     var row = (frame.jobs || []).find(function (j) { return j.job === job; });
     var descriptor = row && S.descriptors.find(function (d) { return d.name === row.descriptor; });
     var window_ = descriptor && descriptor.context.window;
+    var account = rawOn && F.trace ? accountsAt(at)[job] || null : null;
     meta.textContent = "job " + job + (row ? " " + row.descriptor : "") + " · " +
       win.tokens + " tok" + (window_ ? " / " + window_ : "") + " · " +
       win.regions.length + " regions" +
+      (account ? " · " + account.tokens + " model tok · KV " + account.kv : "") +
       (win.last && win.last[1] === at ? " · " + CONTEXT[win.last[0]] : "");
+    if (account) {
+      drawAccount(host, account);
+      return;
+    }
 
     var offset = 0, focus = null;
     win.regions.forEach(function (region) {
@@ -1589,6 +1650,14 @@
         contextJob = $("context-job").value;
         drawContext();
       };
+      if (F.trace) {
+        $("context-raw").hidden = false;
+        $("context-raw").onclick = function () {
+          rawOn = !rawOn;
+          $("context-raw").setAttribute("aria-pressed", String(rawOn));
+          drawContext();
+        };
+      }
       $("first").onclick = function () { seek(0); };
       $("last").onclick = function () { seek(F.count - 1); };
       $("prev").onclick = function () { step(-1); };

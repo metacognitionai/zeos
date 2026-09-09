@@ -608,8 +608,33 @@ def _tick_starts(views: Sequence[Mapping[str, Any]]) -> list[int]:
     return starts
 
 
-def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any]:
-    """Fold a journal into a scrubbable, delta-encoded timeline."""
+def _trace_log(rows: Sequence[Mapping[str, Any]], *, every: int, count: int) -> list[list[Any]]:
+    """The machine's trace re-keyed from journal sequence numbers to frames, otherwise
+    carried whole; ``trace.replay_trace`` is what the page mirrors.
+
+    Rows are ``[frame, job, kv_resident, from_word, words, trailing]``.
+    """
+    return [
+        [
+            _frame_of(int(row["seq"]), every=every, count=count),
+            row["job"],
+            row["kv_resident"],
+            row["from_word"],
+            row["words"],
+            row["trailing"],
+        ]
+        for row in rows
+    ]
+
+
+def frames(
+    records: Iterable[JournalRecord],
+    *,
+    every: int = 1,
+    trace: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Fold a journal into a scrubbable, delta-encoded timeline. ``trace`` is the
+    machine's account when one was written; ``None`` means the page has none to offer."""
     records = list(records)
     timeline = fold((r.event for r in records), every=every)
     views = [_encode(f) for f in timeline.frames]
@@ -621,6 +646,7 @@ def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any
             "lanes": [],
             "tokens": [],
             "contexts": [],
+            "trace": None if trace is None else [],
             "ticks": [],
             "count": 0,
         }
@@ -632,6 +658,7 @@ def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any
         "lanes": _lanes(views),
         "tokens": _token_log(records, every=every, count=len(views)),
         "contexts": _context_log(records, every=every, count=len(views)),
+        "trace": None if trace is None else _trace_log(trace, every=every, count=len(views)),
         "ticks": _tick_starts(views),
         "count": len(views),
     }
@@ -643,6 +670,7 @@ def build_payload(
     records: Sequence[JournalRecord] | None = None,
     findings: Sequence[Finding] = (),
     every: int = 1,
+    trace: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The page's entire input.
 
@@ -659,5 +687,5 @@ def build_payload(
         "kinds": dict(MARKED_KINDS),
     }
     if records is not None:
-        payload["frames"] = frames(records, every=every)
+        payload["frames"] = frames(records, every=every, trace=trace)
     return payload

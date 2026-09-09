@@ -41,7 +41,7 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, read_journal
-from zeos.trace import RawTrace
+from zeos.trace import RawTrace, read_trace
 
 __all__ = ["main"]
 
@@ -190,7 +190,10 @@ def _cmd_debug(args: argparse.Namespace) -> int:
             gates=bundle.gates,
         )
         records = read_journal(Path(args.journal)) if args.journal else None
-        return build_payload(bundle, records=records, findings=findings, every=args.every)
+        trace = read_trace(Path(args.trace)) if args.trace else None
+        return build_payload(
+            bundle, records=records, findings=findings, every=args.every, trace=trace
+        )
 
     if args.out:
         out = export(payload(), Path(args.out))
@@ -311,6 +314,9 @@ def main(argv: list[str] | None = None) -> int:
     p_debug = sub.add_parser("debug", help="draw a case, and step through a journal of it")
     p_debug.add_argument("case", help="path to a case directory")
     p_debug.add_argument("--journal", default=None, help="a journal to step through")
+    p_debug.add_argument(
+        "--trace", default=None, help="the machine trace written beside that journal"
+    )
     p_debug.add_argument("-o", "--out", default=None, help="write one self-contained page")
     p_debug.add_argument("--port", type=int, default=8000)
     p_debug.add_argument(

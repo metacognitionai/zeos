@@ -605,6 +605,42 @@ tr.faulted td { background: color-mix(in srgb, var(--faulted) 12%, transparent);
 .region.now { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .region.unreadable { opacity: 0.45; }
 
+#context-raw {
+  flex: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  padding: 1px 7px;
+}
+#context-raw[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.raw-stream { display: flex; flex-wrap: wrap; gap: 3px; padding: 6px 12px 10px; }
+.piece {
+  font: 10.5px ui-monospace, monospace;
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--dim) 40%, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+  white-space: pre;
+}
+.piece.framing {
+  color: var(--ring0);
+  border-color: color-mix(in srgb, var(--ring0) 55%, transparent);
+  border-style: dashed;
+}
+.piece.now { background: color-mix(in srgb, var(--running) 18%, transparent); border-color: var(--running); }
+.kv-edge {
+  flex-basis: 100%;
+  font: 10px ui-monospace, monospace;
+  color: var(--blocked);
+  border-top: 1px dashed var(--blocked);
+  padding-top: 2px;
+}
+.kv-edge.cached { color: var(--dim); border-color: var(--line); }
+
 /* --- the descriptor sheet -------------------------------------------------- */
 
 /* A box in the diagram is a behaviour; this is what the behaviour says. Positioned
