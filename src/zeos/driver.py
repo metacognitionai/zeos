@@ -12,7 +12,9 @@ and this is it. The driver owns:
 * **time** -- it decides what "now" is and tells the kernel via ``advance_time``;
 * **device adapters** -- turning external events into pipe writes (core §4.3);
 * **transports** -- polling for anything arriving from a peer node;
-* **the journal file** -- the kernel emits events, the driver persists them.
+* **the journal file** -- the kernel emits events, the driver persists them;
+* **the machine's trace** -- after each tick, a machine that can account for its
+  own windows is asked to, and the answer goes to a file beside the journal.
 
 Keeping this boundary sharp is what makes the whole thing replayable. In a test the
 schedule is a list; in deployment it is a sensor feed; the kernel cannot tell the
@@ -39,7 +41,9 @@ from zeos.core.resources import ResourceTable
 from zeos.core.vectors import VectorTable
 from zeos.descriptor.loader import CaseBundle
 from zeos.journal.writer import Journal
+from zeos.machine.base import TracesRaw
 from zeos.machine.scripted import ScriptedMachine
+from zeos.trace import RawTrace
 from zeos.transport.base import PipeTransport
 from zeos.transport.local import LocalTransport
 from zeos.world.store import WorldStore
@@ -136,11 +140,18 @@ class Driver:
         *,
         transport: PipeTransport | None = None,
         journal: Journal | None = None,
+        trace: RawTrace | None = None,
         ns_per_tick: int = DEFAULT_NS_PER_TICK,
     ) -> None:
+        if trace is not None and not isinstance(kernel.machine, TracesRaw):
+            raise TypeError(
+                f"{type(kernel.machine).__name__} gives no account of its windows; "
+                "a trace needs a machine that implements TracesRaw"
+            )
         self.kernel = kernel
         self.transport = transport
         self.journal = journal
+        self.trace = trace
         self.ns_per_tick = ns_per_tick
         self._persisted = 0
         self._now_ns = 0
@@ -150,12 +161,14 @@ class Driver:
 
         Streaming rather than dumping at the end: a run killed mid-flight -- which is
         exactly what a thrash or starvation investigation looks like -- should still
-        leave an analysable journal behind.
+        leave an analysable journal behind. Once per tick, because the machine's
+        account is sampled here.
         """
-        if self.journal is None:
-            return
         pending = self.kernel.events[self._persisted :]
-        self.journal.extend(pending)
+        if self.journal is not None:
+            self.journal.extend(pending)
+        if self.trace is not None and isinstance(self.kernel.machine, TracesRaw):
+            self.trace.sample(self.kernel.machine, pending, self._persisted)
         self._persisted += len(pending)
 
     def boot(self, descriptors: Sequence[DescriptorName]) -> None:
@@ -196,6 +209,7 @@ class Driver:
                 break
             self._now_ns += self.ns_per_tick
             ticks += 1
+            self._flush()
         self._flush()
         return ticks
 

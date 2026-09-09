@@ -49,6 +49,9 @@ __all__ = [
     "DecodeResult",
     "SpliceResult",
     "ContextStats",
+    "RawWord",
+    "RawWindow",
+    "TracesRaw",
     "MachineBackend",
     "ControlTokenViolation",
     "MaskViolation",
@@ -200,6 +203,41 @@ class ContextStats:
     resident_tokens: int
     blocks: int
     open_segment_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class RawWord:
+    """One kernel word as the machine holds it: the model tokens it became, and any
+    control text folded in ahead of it that the kernel never sees or counts."""
+
+    pieces: tuple[str, ...]
+    framing: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RawWindow:
+    """A job's window in the machine's own units, one entry per kernel word.
+
+    ``trailing`` is framing after the last word. ``kv_resident`` is how many model
+    tokens, framing and pieces together, have a forward pass behind them; the rest are
+    prefilled on the next decode.
+    """
+
+    words: tuple[RawWord, ...]
+    kv_resident: int
+    trailing: tuple[str, ...] = ()
+
+    @property
+    def model_tokens(self) -> int:
+        return sum(len(w.pieces) + len(w.framing) for w in self.words) + len(self.trailing)
+
+
+@runtime_checkable
+class TracesRaw(Protocol):
+    """A machine that can account for a window beneath the kernel's words. Optional and
+    outside ``MachineBackend``: nothing below word offsets is a kernel fact."""
+
+    def raw(self, job: JobId) -> RawWindow: ...
 
 
 @runtime_checkable

@@ -41,6 +41,7 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, read_journal
+from zeos.trace import RawTrace
 
 __all__ = ["main"]
 
@@ -95,15 +96,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
         block_size=args.block_size,
     )
     journal = Journal(Path(args.journal) if args.journal else None)
-    driver = Driver(kernel, transport=transport, journal=journal)
+    trace = RawTrace(Path(args.trace)) if args.trace else None
+    driver = Driver(kernel, transport=transport, journal=journal, trace=trace)
     driver.boot(bundle.boot)
     schedule = load_schedule(Path(args.events)) if args.events else ()
     ticks = driver.run(schedule)
     journal.close()
+    if trace is not None:
+        trace.close()
 
     print(f"{bundle.name}: {ticks} ticks, {len(journal)} journal events")
     if args.journal:
         print(f"journal written to {args.journal}")
+    if trace is not None:
+        print(f"machine trace written to {args.trace} ({len(trace)} rows)")
     return 0
 
 
@@ -283,6 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("case")
     p_run.add_argument("--events", default=None, help="JSONL schedule of external events")
     p_run.add_argument("--journal", default=None, help="where to write the journal")
+    p_run.add_argument(
+        "--trace",
+        default=None,
+        help="where to write the machine's own account of each window, beside the journal",
+    )
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--block-size", type=int, default=16)
     p_run.add_argument("--force", action="store_true", help="run despite lint errors")
