@@ -859,7 +859,21 @@ class Kernel:
         # A resume that changed nothing is not news: the job's beliefs are exactly as
         # it left them, so it is told nothing and the journal keeps the record.
         if dirty:
-            self._inject_kernel(job, render_resume_notice(suspended_ns, dirty, waited=waited))
+            # The quoted values are not the kernel's; the notice enters at the
+            # least-trusted ring among them, so a device value cannot reach ring 0 (MP §4).
+            ring, principal = Ring.KERNEL, Principal.KERNEL
+            for delta in dirty:
+                obj_ring, obj_principal = self.world.provenance_of(delta.obj)
+                if int(obj_ring) > int(ring):
+                    ring, principal = obj_ring, obj_principal
+            self._inject(
+                job,
+                tokens_from_text(render_resume_notice(suspended_ns, dirty, waited=waited)),
+                pipe=KERNEL_PIPE,
+                principal=principal,
+                ring=ring,
+                integrity=Integrity(int(ring)),
+            )
         self._emit(
             JobResumed(
                 clock=self.clock,
