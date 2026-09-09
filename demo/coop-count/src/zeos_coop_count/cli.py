@@ -25,7 +25,8 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, load_schedule
 from zeos.journal.writer import Journal
-from zeos.machine.base import MachineRequest, OpKind, render
+from zeos.machine.base import MachineRequest, OpKind, TracesRaw, render
+from zeos.trace import RawTrace
 
 from zeos_coop_count import model as model_mod
 from zeos_coop_count.boot import build_kernel, seat_maps
@@ -77,6 +78,10 @@ def _blocked_on(events: Sequence[Event], pipe: PipeName) -> bool:
         if isinstance(event, JobWoken) and event.pipe == pipe:
             return False
     return False
+
+
+def _accountable(machine: object) -> TracesRaw | None:
+    return machine if isinstance(machine, TracesRaw) else None
 
 
 class _Stop(Exception):
@@ -209,8 +214,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     kernel_box.append(kernel)
 
     journal = Journal(Path(args.journal) if args.journal else None)
-    driver = Driver(kernel, transport=transport, journal=journal)
+    trace: RawTrace | None = None
+    accountable = _accountable(machine)
+    if args.trace:
+        if accountable is None:
+            print(f"the {args.machine} seat gives no account of its windows", file=sys.stderr)
+            return 2
+        trace = RawTrace(Path(args.trace))
+    driver = Driver(kernel, transport=transport, journal=journal, trace=trace)
     driver.boot(bundle.boot)
+    sampled = len(events)
     schedule = load_schedule(Path(args.events)) if args.events else ()
 
     _install_signal_handlers()
@@ -278,6 +291,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 kernel.advance_time(now_ns)
                 ran = kernel.tick()
                 rendered = drain(rendered)
+                if trace is not None and accountable is not None:
+                    trace.sample(accountable, events[sampled:], sampled)
+                    sampled = len(events)
                 now_ns += Driver.DEFAULT_NS_PER_TICK
                 if ran:
                     ticks += 1
@@ -298,6 +314,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     journal.extend(events[len(journal) :])
     journal.close()
+    if trace is not None:
+        trace.close()
 
     print(
         f"\n{bundle.name}: stopped ({reason}) after {ticks} ticks, "
@@ -313,6 +331,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             pass
     if args.journal:
         print(f"journal written to {args.journal}")
+    if trace is not None:
+        print(f"machine trace written to {args.trace} ({len(trace)} rows)")
 
     machine.close()  # pyright: ignore[reportAttributeAccessIssue]
     if model is not None:
@@ -352,6 +372,12 @@ def main(argv: list[str] | None = None) -> int:
         "seat's own default",
     )
     p_run.add_argument("--journal", default=None)
+    p_run.add_argument(
+        "--trace",
+        default=None,
+        help="also write the machine's own account of each window: the model tokens under "
+        "each kernel word, the chat framing, and how far the KV cache reaches",
+    )
     p_run.add_argument("--events", default=None, help="JSONL schedule of external events")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--block-size", type=int, default=16)
