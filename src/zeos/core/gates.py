@@ -33,7 +33,9 @@ mechanism people use and a mechanism people work around.
 The held write reuses ``pending_write`` -- the same parking spot backpressure uses.
 A write waiting for a verdict and a write waiting for buffer space are the same
 situation from the job's point of view: it asked to act, it has not acted yet, and it
-is descheduled until it can. Nothing new was needed.
+is descheduled until it can. Nothing new was needed. A write arriving from outside
+-- a peer node's frame, a device adapter -- has no job to park on, so the kernel
+holds it itself until the verdict lands.
 """
 
 from __future__ import annotations
@@ -167,6 +169,12 @@ class GateTable:
     def by_verdict_pipe(self, pipe: PipeName) -> GateSpec | None:
         return next(
             (self.gates[p] for p in sorted(self.gates) if self.gates[p].verdicts == pipe),
+            None,
+        )
+
+    def by_request_pipe(self, pipe: PipeName) -> GateSpec | None:
+        return next(
+            (self.gates[p] for p in sorted(self.gates) if self.gates[p].requests == pipe),
             None,
         )
 

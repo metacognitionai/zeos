@@ -302,6 +302,8 @@ class Kernel:
         self.allocator: AllocatorPolicy = allocator or GreedyAllocator()
         self.principals = principals if principals is not None else PrincipalTable()
         self.gates = gates if gates is not None else GateTable()
+        self._held_deliveries: dict[JobId, str] = {}
+        self._queued_deliveries: dict[PipeName, list[str]] = {}
         # ZEOS-Distributed. ``node`` names this kernel's scheduling domain; priorities
         # are not comparable across nodes and no attempt is made to make them so
         # ``link`` is the outbound transport toward the peer, owned by the
@@ -616,6 +618,14 @@ class Kernel:
         principal: Principal | None = None,
     ) -> None:
         """A device adapter writes to a pipe. This is how the world reaches the kernel."""
+        gate = self.gates.for_pipe(pipe_name)
+        if gate is not None:
+            self._guard_delivery(gate, text)
+            return
+        self._deliver_now(pipe_name, text)
+        _ = principal  # provenance is stamped at INJECT, from the pipe's binding
+
+    def _deliver_now(self, pipe_name: PipeName, text: str) -> None:
         pipe = self.pipes.ensure(pipe_name)
         tokens = tokens_from_text(text)
         latched = bool(pipe.spec.world_object)
@@ -634,7 +644,57 @@ class Kernel:
             self._apply_world_write(pipe.spec.world_object, text, by=None)
         self._wake_readers(pipe_name)
         self._fire_vectors(pipe_name)
-        _ = principal  # provenance is stamped at INJECT, from the pipe's binding
+
+    def _guard_delivery(self, gate: GateSpec, text: str) -> None:
+        requests = self.pipes.ensure(gate.requests)
+        asked = tokens_from_text(text)
+        if len(asked) > requests.spec.capacity_tokens:
+            self._answer_delivery(
+                gate,
+                text,
+                allowed=gate.on_gate_failure == ALLOW,
+                reason=(
+                    f"an action of {len(asked)} tokens cannot reach the guard through "
+                    f"{gate.requests}, which holds {requests.spec.capacity_tokens}; "
+                    f"applying {gate.on_gate_failure}"
+                ),
+            )
+            return
+        if not requests.writable(len(asked)):
+            self._queued_deliveries.setdefault(gate.pipe, []).append(text)
+            return
+        gate_job = self._ask_guard(gate, text, by=None)
+        self._held_deliveries[gate_job.job_id] = text
+        self._emit(
+            GateConsulted(
+                clock=self.clock,
+                job=None,
+                pipe=gate.pipe,
+                gate=gate.descriptor,
+                gate_job=gate_job.job_id,
+                payload=text,
+            )
+        )
+
+    def _answer_delivery(self, gate: GateSpec, text: str, *, allowed: bool, reason: str) -> None:
+        self._emit(
+            GateAnswered(
+                clock=self.clock,
+                job=None,
+                pipe=gate.pipe,
+                gate=gate.descriptor,
+                allowed=allowed,
+                reason=reason,
+            )
+        )
+        if allowed:
+            self._deliver_now(gate.pipe, text)
+
+    def _pump_queued_deliveries(self, gate: GateSpec) -> None:
+        queue = self._queued_deliveries.get(gate.pipe)
+        requests = self.pipes.ensure(gate.requests)
+        while queue and requests.writable(len(tokens_from_text(queue[0]))):
+            self._guard_delivery(gate, queue.pop(0))
 
     # -- the quantum ---------------------------------------------------------
 
@@ -2252,6 +2312,9 @@ class Kernel:
         )
         if pipe.spec.world_object:
             job.record_read(ObjectSet.of([pipe.spec.world_object]))
+        gate = self.gates.by_request_pipe(pipe_name)
+        if gate is not None:
+            self._pump_queued_deliveries(gate)
         # Space freed: anyone blocked writing to this pipe may now proceed.
         for woken in self.sched.wake_all(pipe.take_waiting_writers()):
             self._release_priority_inheritance(woken)
@@ -2480,8 +2543,8 @@ class Kernel:
             )
             return
 
-        gate_job = self.spawn(gate.descriptor, owner=KERNEL_PRINCIPAL)
-        request = GateRequest(
+        gate_job = self._ask_guard(gate, rendered, by=job.job_id)
+        job.pending_gate = GateRequest(
             job=job.job_id,
             pipe=gate.pipe,
             gate=gate.descriptor,
@@ -2489,24 +2552,7 @@ class Kernel:
             gate_job=gate_job.job_id,
             deadline=self.clock.token_clock + gate.timeout_ticks,
         )
-        job.pending_gate = request
         job.pending_write = (gate.pipe, tuple(payload), then_read)
-
-        # The guard reads the intended action from its stdin. Writing it directly
-        # rather than through `_do_write` is deliberate: the kernel is the one
-        # informing the gate, and routing it through the capability check would ask
-        # whether the *kernel* may write to the gate's own request pipe.
-        accepted = requests.write(asked)
-        self._emit(
-            PipeWritten(
-                clock=self.clock,
-                pipe=gate.requests,
-                job=job.job_id,
-                tokens=accepted,
-                text=tuple(t.text for t in asked[:accepted]),
-            )
-        )
-        self._wake_readers(gate.requests)
 
         self._block(job)
         job.blocked_on = gate.pipe
@@ -2522,6 +2568,31 @@ class Kernel:
                 payload=rendered,
             )
         )
+
+    def _ask_guard(self, gate: GateSpec, rendered: str, *, by: JobId | None) -> Job:
+        """Spawn the guard and hand it the intended action. The caller has checked
+        that the request fits.
+
+        The guard reads the intended action from its stdin. Writing it directly
+        rather than through `_do_write` is deliberate: the kernel is the one
+        informing the gate, and routing it through the capability check would ask
+        whether the *kernel* may write to the gate's own request pipe.
+        """
+        gate_job = self.spawn(gate.descriptor, owner=KERNEL_PRINCIPAL)
+        requests = self.pipes.ensure(gate.requests)
+        asked = tokens_from_text(rendered)
+        accepted = requests.write(asked)
+        self._emit(
+            PipeWritten(
+                clock=self.clock,
+                pipe=gate.requests,
+                job=by,
+                tokens=accepted,
+                text=tuple(t.text for t in asked[:accepted]),
+            )
+        )
+        self._wake_readers(gate.requests)
+        return gate_job
 
     def _refuse_gate(
         self,
@@ -2571,6 +2642,14 @@ class Kernel:
             request = job.pending_gate
             if request is not None and request.gate_job == gate_job.job_id:
                 self._apply_verdict(job, gate, verdict, text)
+        held = self._held_deliveries.pop(gate_job.job_id, None)
+        if held is not None:
+            if verdict is None:
+                allowed = gate.on_gate_failure == ALLOW
+                reason = f"unparseable verdict {text!r}; applying {gate.on_gate_failure}"
+            else:
+                allowed, reason = verdict.allowed, verdict.reason
+            self._answer_delivery(gate, held, allowed=allowed, reason=reason)
 
     def _apply_verdict(
         self,

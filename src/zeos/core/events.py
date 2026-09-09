@@ -1159,7 +1159,7 @@ class GateConsulted(Event):
 
     KIND: ClassVar[str] = "nli.gate_consulted"
 
-    job: JobId
+    job: JobId | None  # None when the kernel asks on behalf of a delivery
     pipe: PipeName
     gate: DescriptorName
     gate_job: JobId
@@ -1177,7 +1177,7 @@ class GateAnswered(Event):
 
     KIND: ClassVar[str] = "nli.gate_answered"
 
-    job: JobId
+    job: JobId | None  # None when the kernel asks on behalf of a delivery
     pipe: PipeName
     gate: DescriptorName
     allowed: bool
