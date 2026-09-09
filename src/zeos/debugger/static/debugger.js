@@ -40,6 +40,21 @@
     read: { glyph: "\u2190", cls: "read" }
   };
 
+  /* Must agree with payload.CONTEXT_OPS. */
+  var CONTEXT = {
+    inject: "arrived",
+    decode: "generated",
+    pad: "padded to a block boundary",
+    splice: "spliced",
+    stub: "evicted to a stub",
+    fork: "forked from the parent",
+    perms: "permissions changed"
+  };
+
+  var CTX_STRIDE = 256;
+  var PERMS = [[1, "R"], [2, "X"], [4, "W"], [8, "P"]];
+  var FOLD_OVER = 160;
+
   var STATES = [
     "running", "ready", "blocked", "suspended", "pinned_idle", "faulted", "done"
   ];
@@ -61,7 +76,10 @@
    * "job:N" or "pipe:NAME". Not remembered across reloads -- unlike the edge
    * toggles it is a question about one run, not a way of reading the diagram. */
   var tokenFilter = "";
-  var keyframes = [], nodes = {}, chips = {}, objects = {}, playing = false, timer = null;
+  var contextJob = "";
+  var folded = {};
+  var keyframes = [], ctxKeyframes = [], nodes = {}, chips = {}, objects = {};
+  var playing = false, timer = null;
 
   /* Which edge kinds are drawn. Layout ignores this entirely -- see buildLayout --
    * so hiding a kind subtracts lines from a fixed picture rather than redrawing a
@@ -69,6 +87,7 @@
   var show = { pipes: true, vectors: true, maps: true };
   var STORE_KEY = "zeos.debugger.show";
   var WIDTH_KEY = "zeos.debugger.side";
+  var PANES_KEY = "zeos.debugger.panes";
 
   /* How narrow each side of the seam may get. The panes have a fixed two-column
    * table and a progress bar in them, so below MIN_SIDE they stop being readable
@@ -101,6 +120,38 @@
     try {
       window.localStorage.setItem(STORE_KEY, JSON.stringify(show));
     } catch (err) { /* nothing to do; the toggles still work for this session */ }
+  }
+
+  /* --- folding panes ------------------------------------------------------- */
+
+  function installPaneFolds() {
+    var saved = {};
+    try {
+      saved = JSON.parse(window.localStorage.getItem(PANES_KEY) || "{}") || {};
+    } catch (err) { /* no storage; every pane opens */ }
+
+    document.querySelectorAll("#side .pane").forEach(function (pane) {
+      var head = pane.querySelector(".pane-head");
+      var name = head.querySelector("h2").textContent;
+      var button = el("button", "fold");
+      button.type = "button";
+      button.title = "fold or unfold this pane";
+      function apply(isFolded) {
+        pane.classList.toggle("collapsed", isFolded);
+        button.setAttribute("aria-expanded", String(!isFolded));
+        button.textContent = isFolded ? "\u25B8" : "\u25BE";
+      }
+      apply(saved[name] === true);
+      button.onclick = function () {
+        var isFolded = !pane.classList.contains("collapsed");
+        apply(isFolded);
+        saved[name] = isFolded;
+        try {
+          window.localStorage.setItem(PANES_KEY, JSON.stringify(saved));
+        } catch (err) { /* nothing to do; the fold still holds for this session */ }
+      };
+      head.insertBefore(button, head.firstChild);
+    });
   }
 
   /* --- the divider --------------------------------------------------------- */
@@ -263,6 +314,109 @@
     var current = keyframes[block];
     for (var i = block * STRIDE; i < index; i++) current = merge(current, F.deltas[i]);
     return current;
+  }
+
+  /* --- windows ------------------------------------------------------------- */
+
+  /* Keeps a copy every CTX_STRIDE rows in `cache`, so a seek replays at most one stride. */
+  function replayLog(log, cache, apply, index) {
+    var lo = 0, hi = log.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (log[mid][0] <= index) lo = mid + 1; else hi = mid;
+    }
+    var end = lo, block = Math.floor(end / CTX_STRIDE);
+    if (!cache[0]) cache[0] = {};
+    var from = block;
+    while (from > 0 && !cache[from]) from--;
+    var built = JSON.parse(JSON.stringify(cache[from]));
+    for (var n = from * CTX_STRIDE; n < end; n++) {
+      if (n % CTX_STRIDE === 0 && n > 0 && !cache[n / CTX_STRIDE]) {
+        cache[n / CTX_STRIDE] = JSON.parse(JSON.stringify(built));
+      }
+      apply(built, log[n]);
+    }
+    return built;
+  }
+
+  function blankRegion(kind, segment, count) {
+    return {
+      segment: segment, kind: kind, pipe: null, ring: null, integrity: null,
+      perms: null, count: count, text: [], stub_of: null, store: null, at: -1
+    };
+  }
+
+  function regionOf(win, segment) {
+    for (var i = 0; i < win.regions.length; i++) {
+      if (win.regions[i].segment === segment) return win.regions[i];
+    }
+    return null;
+  }
+
+  function windowOf(windows, job) {
+    if (!windows[job]) windows[job] = { regions: [], tokens: 0, last: null };
+    return windows[job];
+  }
+
+  /* The mirror of payload.replay_context; the proof that it matches is in Python. */
+  function applyContextOp(windows, row) {
+    var frameNo = row[0], op = row[1], job = row[2];
+    var win = windowOf(windows, job), region, index;
+    switch (op) {
+      case "inject":
+        region = blankRegion("inject", row[3], row[7].length);
+        region.pipe = row[4]; region.ring = row[5]; region.integrity = row[6];
+        region.text = row[7].slice();
+        win.regions.push(region);
+        win.tokens += region.count;
+        break;
+      case "decode":
+        region = regionOf(win, row[3]);
+        if (!region) { region = blankRegion("output", row[3], 0); win.regions.push(region); }
+        region.text = region.text.concat(row[4]);
+        region.count += row[4].length;
+        win.tokens += row[4].length;
+        break;
+      case "pad":
+        region = blankRegion("pad", null, row[3]);
+        win.regions.push(region);
+        win.tokens += row[3];
+        break;
+      case "splice":
+        region = regionOf(win, row[3]);
+        index = win.regions.indexOf(region);
+        win.tokens -= region.count;
+        if (row[5]) {
+          region = blankRegion("stub", row[4], row[5]);
+          win.regions[index] = region;
+          win.tokens += row[5];
+        } else {
+          win.regions.splice(index, 1);
+          region = null;
+        }
+        break;
+      case "stub":
+        region = regionOf(win, row[3]);
+        region.stub_of = row[4]; region.store = row[5];
+        break;
+      case "fork":
+        windows[job] = JSON.parse(JSON.stringify(windowOf(windows, row[3])));
+        win = windows[job];
+        region = null;
+        break;
+      case "perms":
+        region = regionOf(win, row[3]);
+        region.perms = row[4];
+        break;
+      default:
+        throw new Error("unknown context operation " + op);
+    }
+    if (region) region.at = frameNo;
+    win.last = [op, frameNo];
+  }
+
+  function windowsAt(index) {
+    return replayLog(F ? (F.contexts || []) : [], ctxKeyframes, applyContextOp, index);
   }
 
   function jobsOf(name) {
@@ -951,34 +1105,132 @@
     host.scrollTop = host.scrollHeight;
   }
 
-  /* The filter's options are the run's jobs and the case's pipes, rebuilt when the
-   * set of jobs changes -- jobs appear as the run goes on. */
-  function tokenFilterOptions() {
-    var select = $("token-filter");
-    var options = [{ value: "", label: "everything" }];
+  /* Rebuilt only when the choices change, because a select rebuilt every frame closes as it opens. */
+  function rebuildSelect(select, options, current) {
+    var signature = options.map(function (o) { return o.value; }).join("|");
+    if (select.dataset.built !== signature) {
+      select.dataset.built = signature;
+      clear(select);
+      options.forEach(function (o) {
+        var option = el("option", null, o.label);
+        option.value = o.value;
+        select.appendChild(option);
+      });
+    }
+    select.value = current;
+    if (select.value !== current) select.value = "";
+    return select.value;
+  }
+
+  function jobOptions(first) {
+    var options = [{ value: "", label: first }];
     (frame ? frame.jobs || [] : []).forEach(function (j) {
       options.push({ value: "job:" + j.job, label: "job " + j.job + " " + j.descriptor });
     });
-    S.pipes.forEach(function (p) {
-      options.push({ value: "pipe:" + p.name, label: p.name });
-    });
+    return options;
+  }
 
-    /* Rebuilt only when the choices actually change. A select rebuilt on every frame
-     * closes itself the moment it is opened, which makes it unusable during playback. */
-    var signature = options.map(function (o) { return o.value; }).join("|");
-    if (select.dataset.built === signature) return;
-    select.dataset.built = signature;
-    clear(select);
-    options.forEach(function (o) {
-      var option = el("option", null, o.label);
-      option.value = o.value;
-      select.appendChild(option);
-    });
+  function tokenFilterOptions() {
+    var options = jobOptions("everything");
+    S.pipes.forEach(function (p) { options.push({ value: "pipe:" + p.name, label: p.name }); });
+    tokenFilter = rebuildSelect($("token-filter"), options, tokenFilter);
+  }
 
-    select.value = tokenFilter;
-    /* Scrubbing back past a job's spawn removes its option. Falling back to
-     * everything beats leaving the pane filtered to something the box no longer says. */
-    if (select.value !== tokenFilter) { tokenFilter = ""; select.value = ""; }
+  function contextOptions() {
+    contextJob = rebuildSelect($("context-job"), jobOptions("running job"), contextJob);
+  }
+
+  function contextTarget(windows) {
+    if (contextJob !== "") {
+      var chosen = Number(contextJob.slice(4));
+      return windows[chosen] ? chosen : null;
+    }
+    if (frame && frame.running !== null && windows[frame.running]) return frame.running;
+    var ids = Object.keys(windows).map(Number).sort(byKey);
+    return ids.length ? ids[0] : null;
+  }
+
+  function permsText(perms) {
+    var out = "";
+    PERMS.forEach(function (bit) { out += (perms & bit[0]) ? bit[1] : "-"; });
+    return out;
+  }
+
+  function regionLabel(region) {
+    if (region.kind === "inject") {
+      return region.pipe + " · ring " + region.ring + " · integ " + region.integrity;
+    }
+    if (region.kind === "output") return "output";
+    if (region.kind === "stub") return "stub for seg " + region.stub_of;
+    return "padding";
+  }
+
+  function regionNote(region) {
+    if (region.kind === "stub") {
+      return region.count + " tokens of <STUB> framing and summary standing for segment " +
+        region.stub_of + (region.store ? ", content in store " + region.store : "") +
+        " -- the journal records the size, not the text";
+    }
+    return region.count + " \u00d7 pad, owned by no segment";
+  }
+
+  function drawContext() {
+    var host = $("context"), meta = $("context-meta");
+    clear(host);
+    meta.textContent = "";
+    if (!F || !F.count) {
+      host.appendChild(el("p", "empty", "No journal loaded."));
+      return;
+    }
+    var windows = windowsAt(at);
+    var job = contextTarget(windows);
+    if (job === null) {
+      host.appendChild(el("p", "empty", "No job holds a window yet at this point in the run."));
+      return;
+    }
+    var win = windows[job];
+    var row = (frame.jobs || []).find(function (j) { return j.job === job; });
+    var descriptor = row && S.descriptors.find(function (d) { return d.name === row.descriptor; });
+    var window_ = descriptor && descriptor.context.window;
+    meta.textContent = "job " + job + (row ? " " + row.descriptor : "") + " · " +
+      win.tokens + " tok" + (window_ ? " / " + window_ : "") + " · " +
+      win.regions.length + " regions" +
+      (win.last && win.last[1] === at ? " · " + CONTEXT[win.last[0]] : "");
+
+    var offset = 0, focus = null;
+    win.regions.forEach(function (region) {
+      var classes = ["region", region.kind];
+      if (region.ring !== null) classes.push("ring" + region.ring);
+      if (region.at === at) classes.push("now");
+      if (region.perms !== null && !(region.perms & 1)) classes.push("unreadable");
+      var key = job + ":" + region.segment;
+      var fold = key in folded ? folded[key] : (region.count > FOLD_OVER && region.at !== at);
+      if (fold && region.text.length) classes.push("collapsed");
+      var node = el("div", classes.join(" "));
+
+      var head = el("div", "region-head");
+      head.appendChild(el("span", "seg", region.segment === null ? "\u2014" : "seg " + region.segment));
+      var what = regionLabel(region);
+      if (region.perms !== null) what += " · " + permsText(region.perms);
+      head.appendChild(el("span", "what", what));
+      head.appendChild(el("span", "off", region.count + " tok @" + offset));
+      node.appendChild(head);
+
+      if (region.text.length) {
+        if (!fold) {
+          var toks = el("div", "toks");
+          region.text.forEach(function (text) { toks.appendChild(el("code", "tok", text)); });
+          node.appendChild(toks);
+        }
+        head.onclick = function () { folded[key] = !fold; drawContext(); };
+      } else {
+        node.appendChild(el("div", "told", regionNote(region)));
+      }
+      if (region.at === at) focus = node;
+      offset += region.count;
+      host.appendChild(node);
+    });
+    if (focus) focus.scrollIntoView({ block: "nearest" });
   }
 
   function drawWorld() {
@@ -1159,6 +1411,8 @@
     drawPipes();
     tokenFilterOptions();
     drawTokens();
+    contextOptions();
+    drawContext();
     drawWorld();
     drawFaults();
 
@@ -1307,6 +1561,7 @@
     $("case").textContent = S.case;
     loadToggles();  // before badges(), which renders the switches in their state
     installDivider();
+    installPaneFolds();
     badges();
     legend();
     edgeKey();
@@ -1329,6 +1584,10 @@
       $("token-filter").onchange = function () {
         tokenFilter = $("token-filter").value;
         drawTokens();
+      };
+      $("context-job").onchange = function () {
+        contextJob = $("context-job").value;
+        drawContext();
       };
       $("first").onclick = function () { seek(0); };
       $("last").onclick = function () { seek(F.count - 1); };

@@ -52,6 +52,16 @@
       <div id="jobs"></div></section>
     <section class="pane"><div class="pane-head"><h2>suspension stack</h2></div>
       <div id="stack"></div></section>
+    <!-- One job's window at this frame, rebuilt from the operations that changed it. -->
+    <section class="pane" id="context-pane">
+      <div class="pane-head">
+        <h2>context</h2>
+        <select id="context-job" aria-label="whose window to show">
+          <option value="">running job</option>
+        </select>
+        <span class="context-meta" id="context-meta"></span>
+      </div>
+      <div id="context"></div></section>
     <section class="pane"><div class="pane-head"><h2>pipes</h2></div>
       <div id="pipes"></div></section>
     <!-- The token stream. Pipes above show what is *in* a buffer at this frame;

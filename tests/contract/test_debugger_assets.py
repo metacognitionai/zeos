@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from zeos.core.events import EVENT_REGISTRY
-from zeos.debugger.payload import MOVEMENTS
+from zeos.debugger.payload import CONTEXT_OPS, MOVEMENTS
 from zeos.debugger.server import ASSETS, PLACEHOLDER, STATIC
 from zeos.monitor.state import MARKED_KINDS
 
@@ -52,6 +52,21 @@ def test_the_page_draws_every_movement_the_log_can_carry() -> None:
     drawn = set(re.findall(r"(\w+): \{", block.group(1)))
     assert drawn == set(MOVEMENTS), (
         f"the page draws {sorted(drawn)} but the token log carries {sorted(MOVEMENTS)}"
+    )
+
+
+def test_the_page_replays_every_context_operation() -> None:
+    """The page rebuilds a job's window by mirroring ``payload.replay_context`` step
+    for step, and ``CONTEXT_OPS`` is the list of steps. An operation the page has no
+    entry for would be skipped in silence, and the window drawn would be wrong in a
+    way nothing on screen reveals -- a token count that does not add up.
+    """
+    body = SCRIPT.read_text(encoding="utf-8")
+    block = re.search(r"var CONTEXT = \{(.*?)\n  \};", body, re.S)
+    assert block, "debugger.js no longer declares a CONTEXT table"
+    drawn = set(re.findall(r"(\w+): \"", block.group(1)))
+    assert drawn == set(CONTEXT_OPS), (
+        f"the page replays {sorted(drawn)} but the context log carries {sorted(CONTEXT_OPS)}"
     )
 
 
