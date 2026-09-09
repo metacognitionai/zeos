@@ -2922,6 +2922,7 @@ class Kernel:
                 evicted_at_block=job.last_block,
                 freed_tokens=record.tokens - len(stub_tokens),
                 stub_tokens=len(stub_tokens),
+                owner=job.job_id,
             )
         )
         self._refresh_mask(job)
@@ -2958,7 +2959,7 @@ class Kernel:
             )
             self._check_thrash(job)
 
-        result = self.pager.resolve_fault(segment)
+        result = self.pager.resolve_fault(segment, owner=job.job_id)
         self._complete_page_in(job, segment, result)
 
     def _service_need(self, job: Job, text: str) -> None:
@@ -2973,7 +2974,7 @@ class Kernel:
                 clock=self.clock, job=job.job_id, explicit=False, segment=None, need_text=text
             )
         )
-        self._complete_page_in(job, None, self.pager.resolve_need(text))
+        self._complete_page_in(job, None, self.pager.resolve_need(text, owner=job.job_id))
 
     def _complete_page_in(self, job: Job, segment: SegmentId | None, result: PagerResult) -> None:
         if result.span is None:
