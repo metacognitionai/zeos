@@ -30,7 +30,8 @@ from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 
-from zeos.core.ids import JobId, PipeName, TokenKind
+from zeos.core.ids import JobId, TokenKind
+from zeos.machine.abi import SyscallABI, Verb
 from zeos.machine.base import (
     AttentionHint,
     ContextStats,
@@ -40,20 +41,18 @@ from zeos.machine.base import (
     OpKind,
     SpliceResult,
     Token,
-    tokens_from_text,
 )
+from zeos.machine.seat import SyscallParser, SyscallSeat
 
 __all__ = [
-    "ALIASES",
+    "ABI",
     "DEFAULT_BLOCK_SIZE",
     "DEFAULT_STALL_S",
     "FORMATS",
     "PAD_TOKEN",
-    "VERBS",
     "APIMachineBase",
     "Native",
     "Piece",
-    "parse_syscall",
 ]
 
 
@@ -80,9 +79,17 @@ IN, OUT, PAD, THINK, VOID = "in", "out", "pad", "think", "void"
 #: ``drop`` voids everything the generation produced.
 PARTIAL = ("syscall", "keep", "drop")
 
-#: The pipe aliases ``Kernel._resolve_pipe`` resolves against a descriptor's own
-#: ``pipes:`` block; anything else reaches the capability check as a literal name.
-ALIASES = ("stdin", "stdout", "tools")
+#: The commands a pilot may issue. No ``say``: the body forbids prose, and in
+#: ``json`` the schema leaves nowhere to put any. No payload cap: a move is one word
+#: and the schema, not a count, is what bounds it.
+ABI = SyscallABI(
+    verbs=(
+        Verb("write", OpKind.WRITE, pipe=True, text=True, doc="one move, to stdout"),
+        Verb("read", OpKind.READ, pipe=True, doc="sleep until the next board"),
+        Verb("exit", OpKind.EXIT, doc="end the job"),
+    ),
+    max_text=None,
+)
 
 #: Where a turn goes to sleep; the model is never told the pipe exists.
 STDIN = "stdin"
@@ -95,49 +102,11 @@ STDOUT = "stdout"
 #: because it is the only format that is both enforced and widely served.
 FORMATS = ("json", "text")
 
-#: The verbs the ``text`` ABI defines. A clause begins at one of these and ends at
-#: the next semicolon; ``text`` has no grammar, so "everything since the last
-#: semicolon" would hand ``parse_syscall`` the model's prose as a clause.
-VERBS = ("read", "write", "exit")
-
-#: Characters that end a decoded element, per format, so that no decode step can
-#: carry two syscalls inside one scheduling quantum. ``json`` breaks on
-#: punctuation because a compact object contains no whitespace.
-_TERMINATORS = {"text": ";", "json": "{}[],"}
-
-
-def parse_syscall(clause: str) -> MachineRequest:
-    """The request a ``text``-format clause asks for, or ``NONE``.
-
-    Semicolon-terminated rather than newline-terminated because the kernel loads
-    a descriptor body through ``tokens_from_text``, which splits on whitespace: a
-    model never sees a newline in its own context and does not produce one.
-    """
-    body = clause.strip().rstrip(";").strip()
-    if not body:
-        return MachineRequest()
-    verb, _, rest = body.partition(" ")
-    alias, _, arg = rest.strip().partition(" ")
-    return build_request(verb, alias, arg)
-
-
-def build_request(op: str, pipe: str, text: str = "") -> MachineRequest:
-    """One request, whatever format it was expressed in.
-
-    Aliases pass through unresolved: a pipe the job was not granted is refused by
-    the kernel's capability check, a fault a parser must not quietly drop.
-    """
-    if op == "exit":
-        return MachineRequest(op=OpKind.EXIT)
-    if not pipe:
-        return MachineRequest()
-    if op == "read":
-        return MachineRequest(op=OpKind.READ, pipe=PipeName(pipe))
-    if op == "write":
-        return MachineRequest(
-            op=OpKind.WRITE, pipe=PipeName(pipe), payload=tokens_from_text(text)
-        )
-    return MachineRequest()
+#: Characters that end a decoded element in ``json``, so that no decode step can
+#: carry two syscalls inside one scheduling quantum; a compact object contains no
+#: whitespace, so it has to break on punctuation. ``text`` breaks on the ABI's
+#: terminator.
+_JSON_TERMINATORS = "{}[],"
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,20 +193,20 @@ class _Context:
     """Per-job state: the token sequence and blocks the kernel meets at offsets."""
 
     descriptor: str
+    #: ``text`` format only: the command being accumulated, read from its verb.
+    parser: SyscallParser
     tokens: list[Token] = field(default_factory=list)
     #: Parallel to ``tokens``: IN, OUT, PAD, THINK or VOID, one per element.
     origin: list[str] = field(default_factory=list)
     #: ``None`` is ⊥, not ∅; collapsing them is a privilege escalation (ZEOS-AM §8.2).
     mask: frozenset[int] | None = None
     gen: _Generation | None = None
-    #: ``text`` format only: the clause being accumulated.
-    clause: str = ""
     #: Natively-served jobs only; see ``Native``.
     step: int = 0
     arrived: list[Token] = field(default_factory=list)
 
 
-class APIMachineBase:
+class APIMachineBase(SyscallSeat):
     """A ``MachineBackend`` over a streaming chat API, vendor-agnostic.
 
     A subclass implements ``_request`` and ``_stream`` and nothing else, so a
@@ -247,6 +216,7 @@ class APIMachineBase:
     def __init__(
         self,
         *,
+        abi: SyscallABI = ABI,
         block_size: int = DEFAULT_BLOCK_SIZE,
         stall_s: float = DEFAULT_STALL_S,
         max_tokens: int = 512,
@@ -254,6 +224,7 @@ class APIMachineBase:
         partial: str | None = None,
         actions: Sequence[str] = (),
     ) -> None:
+        super().__init__(abi=abi)
         if block_size < 1:
             raise ValueError("block_size must be >= 1")
         if syscall_format not in FORMATS:
@@ -377,7 +348,10 @@ class APIMachineBase:
         return self._block_size
 
     def create_context(self, job: JobId, descriptor: str = "") -> None:
-        self._ctx[job] = _Context(descriptor=descriptor)
+        self._ctx[job] = _Context(descriptor=descriptor, parser=self._parser())
+
+    def _parser(self) -> SyscallParser:
+        return SyscallParser(self.abi)
 
     def destroy_context(self, job: JobId) -> None:
         ctx = self._ctx.pop(job, None)
@@ -440,9 +414,9 @@ class APIMachineBase:
         for seconds, and that wait must not sit in front of the next question.
         """
         gen, ctx.gen = ctx.gen, None
-        # A half-built clause belongs to the completion being dropped; kept, it is
+        # A half-built command belongs to the completion being dropped; kept, it is
         # spliced onto the next completion's first words.
-        ctx.clause = ""
+        ctx.parser.reset()
         if gen is None or gen.done:
             return
         self._void_tail(ctx, gen)
@@ -536,7 +510,12 @@ class APIMachineBase:
         ``json`` whitespace is content, so splitting on it would lose the space
         when the extractor rebuilds the document.
         """
-        terminators = "" if prose else _TERMINATORS[self.syscall_format]
+        if prose:
+            terminators = ""
+        elif self.syscall_format == "text":
+            terminators = self.abi.terminator
+        else:
+            terminators = _JSON_TERMINATORS
         out: list[str] = []
         rest = text
         if terminators and self.syscall_format != "text":
@@ -634,15 +613,16 @@ class APIMachineBase:
         return self._request_from_json(gen, word)
 
     def _request_from_text(self, ctx: _Context, word: str) -> MachineRequest:
-        """A clause begins at a verb and ends at the next semicolon; see ``VERBS``."""
-        if word.rstrip(";") in VERBS:
-            ctx.clause = word.rstrip(";")
-        elif ctx.clause:
-            ctx.clause = f"{ctx.clause} {word}"
-        if word.endswith(";") and ctx.clause:
-            clause, ctx.clause = ctx.clause, ""
-            return parse_syscall(clause)
-        return MachineRequest()
+        """A command begins at a verb; ``text`` has no grammar, so the model may put
+        prose in front of one, and everything since the last terminator would hand
+        that prose to the parser. ``_split`` gives bare words, so the separator it
+        dropped goes back on.
+        """
+        if self.abi.verb(word.rstrip(self.abi.terminator)) is not None:
+            ctx.parser.reset()
+        elif not ctx.parser.buffer:
+            return MachineRequest()
+        return ctx.parser.feed(f" {word}")
 
     def _request_from_json(self, gen: _Generation, word: str) -> MachineRequest:
         """Scan the half-arrived content for the completed move object."""
@@ -684,7 +664,7 @@ class APIMachineBase:
         move = str(step.get("move", ""))
         if not move:
             return MachineRequest()
-        return build_request("write", STDOUT, move)
+        return self.abi.parse(f"write {STDOUT} {move}")
 
     # -- the request ---------------------------------------------------------
 
@@ -766,10 +746,10 @@ class APIMachineBase:
             # read is only a yield, and waiting has to be a state the kernel puts
             # the job in rather than an instruction in its prose.
             ctx.gen = None
-            ctx.clause = ""
+            ctx.parser.reset()
             return DecodeResult(
                 tokens=(),
-                request=build_request("read", STDIN),
+                request=self.abi.parse(f"read {STDIN}"),
                 attention=None,
                 attention_hint=AttentionHint(tags=("self",)),
             )
@@ -838,7 +818,7 @@ class APIMachineBase:
             self._cancel(ctx)
             del ctx.tokens[at:]
             del ctx.origin[at:]
-            ctx.clause = ""
+            ctx.parser.reset()
         return dropped
 
     def fork(self, parent: JobId, child: JobId) -> int:
@@ -846,14 +826,14 @@ class APIMachineBase:
         src = self._ctx_of(parent)
         dst = self._ctx.get(child)
         if dst is None:
-            dst = _Context(descriptor=src.descriptor)
+            dst = _Context(descriptor=src.descriptor, parser=self._parser())
             self._ctx[child] = dst
         # Cancelled *before* the child's sequence is replaced. See ``splice``.
         self._cancel(dst)
         dst.tokens = list(src.tokens)
         dst.origin = list(src.origin)
         dst.mask = src.mask
-        dst.clause = ""
+        dst.parser.reset()
         return len(src.tokens)
 
     def splice(
