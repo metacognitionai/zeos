@@ -495,6 +495,17 @@ class PipeWritten(Event):
 
 @event_class
 @dataclass(frozen=True)
+class PipeDrained(Event):
+    """The driver took everything out of a sink pipe and handed it to the world."""
+
+    KIND: ClassVar[str] = "pipe.drained"
+
+    pipe: PipeName
+    tokens: int
+
+
+@event_class
+@dataclass(frozen=True)
 class PipeReadEvent(Event):
     KIND: ClassVar[str] = "pipe.read"
 

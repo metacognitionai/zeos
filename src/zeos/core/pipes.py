@@ -60,6 +60,13 @@ class PipeSpec:
     #: (core §4.3) -- the outbound direction, where a pipe write becomes an effect.
     #: It is what lets a job's writes show up in another job's resume diff.
     world_object: str | None = None
+    #: Sink pipes: written by a job, drained by the driver for the outside world -- the
+    #: other outbound kind, a history rather than a value, and ``deliver``'s mirror.
+    sink: bool = False
+
+    def __post_init__(self) -> None:
+        if self.sink and self.world_object:
+            raise PipeError(f"pipe {self.name!r} cannot be both a sink and an actuator")
 
 
 @dataclass

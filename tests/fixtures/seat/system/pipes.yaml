@@ -1,5 +1,6 @@
-# One pipe, so the tape's write has somewhere to land.
+# The reply pipe: a sink, drained by the driver and printed by `zeos run`.
 - name: ops.report
   ring: TRUSTED
   principal: user
+  sink: true
   capacity: 64

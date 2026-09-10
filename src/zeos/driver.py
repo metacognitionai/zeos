@@ -29,7 +29,7 @@ determinism depends on.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +41,7 @@ from zeos.core.resources import ResourceTable
 from zeos.core.vectors import VectorTable
 from zeos.descriptor.loader import CaseBundle
 from zeos.journal.writer import Journal
-from zeos.machine.base import MachineBackend, TracesRaw
+from zeos.machine.base import MachineBackend, Token, TracesRaw
 from zeos.machine.scripted import ScriptedMachine
 from zeos.trace import RawTrace
 from zeos.transport.base import PipeTransport
@@ -144,6 +144,7 @@ class Driver:
         journal: Journal | None = None,
         trace: RawTrace | None = None,
         ns_per_tick: int = DEFAULT_NS_PER_TICK,
+        on_drain: Callable[[PipeName, tuple[Token, ...]], None] | None = None,
     ) -> None:
         if trace is not None and not isinstance(kernel.machine, TracesRaw):
             raise TypeError(
@@ -155,6 +156,7 @@ class Driver:
         self.journal = journal
         self.trace = trace
         self.ns_per_tick = ns_per_tick
+        self.on_drain = on_drain
         self._persisted = 0
         self._now_ns = 0
 
@@ -211,9 +213,19 @@ class Driver:
                 break
             self._now_ns += self.ns_per_tick
             ticks += 1
+            self._drain_sinks()
             self._flush()
+        self._drain_sinks()
         self._flush()
         return ticks
+
+    def _drain_sinks(self) -> None:
+        """Take what jobs wrote for the world out of every sink, the mirror of ``deliver``."""
+        for pipe in self.kernel.pipes.all():
+            if pipe.spec.sink and pipe.available:
+                tokens = self.kernel.drain(pipe.name)
+                if self.on_drain is not None:
+                    self.on_drain(pipe.name, tokens)
 
     def _poll_transport(self) -> None:
         """Drain anything arriving from a peer node.

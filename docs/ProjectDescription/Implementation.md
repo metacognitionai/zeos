@@ -39,7 +39,7 @@ src/zeos/
 │   ├── ids.py               identifiers + cross-cutting enums (leaf: imports nothing)
 │   ├── serde.py             structural round-trip, hard failure on unserialisable
 │   ├── clock.py             two time bases, both injected
-│   ├── events.py            the 47-event journal alphabet
+│   ├── events.py            the 80-event journal alphabet
 │   ├── pcb.py               Job -- descriptor + transcript + metadata
 │   ├── scheduler.py         ready set, running job, suspension stack, inheritance
 │   ├── pipes.py             bounded buffers, blocking, select, backpressure

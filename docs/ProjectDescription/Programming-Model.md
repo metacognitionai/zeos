@@ -173,6 +173,10 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
 - name: user.commands
   ring: TRUSTED           # authenticated household members
   principal: user
+- name: user.replies
+  ring: TRUSTED
+  principal: user
+  sink: true              # written by jobs, drained by the driver for the household
 - name: frontdoor.mic
   ring: EXTERNAL          # ring 3: an open-air microphone
   principal: user

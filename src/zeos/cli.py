@@ -41,6 +41,7 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, read_journal
+from zeos.machine.base import render
 from zeos.machine.seat import CommandSeat, TapeSource
 from zeos.trace import RawTrace, read_trace
 
@@ -104,7 +105,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
     journal = Journal(Path(args.journal) if args.journal else None)
     trace = RawTrace(Path(args.trace)) if args.trace else None
-    driver = Driver(kernel, transport=transport, journal=journal, trace=trace)
+    driver = Driver(
+        kernel,
+        transport=transport,
+        journal=journal,
+        trace=trace,
+        on_drain=None
+        if args.quiet
+        else lambda pipe, tokens: print(f"{pipe} \u25c0\u2500\u2500 {render(tokens)}"),
+    )
     driver.boot(bundle.boot)
     schedule = load_schedule(Path(args.events)) if args.events else ()
     ticks = driver.run(schedule)
@@ -314,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
         "scripts spoken as syscall commands through the seat, one word per decode",
     )
     p_run.add_argument("--force", action="store_true", help="run despite lint errors")
+    p_run.add_argument(
+        "--quiet", action="store_true", help="do not print what leaves the sink pipes"
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_replay = sub.add_parser("replay", help="re-read a journal and check it reproduces")

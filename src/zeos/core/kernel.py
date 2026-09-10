@@ -100,6 +100,7 @@ from zeos.core.events import (
     PermsChanged,
     PipeBackpressure,
     PipeCreated,
+    PipeDrained,
     PipeReadEvent,
     PipeWritten,
     PlatformJoined,
@@ -162,7 +163,7 @@ from zeos.core.ids import (
 from zeos.core.integrity import DEFAULT_THETA_READ, demote_for_boundary
 from zeos.core.pager import Pager, PagerResult, choose_plan
 from zeos.core.pcb import Job
-from zeos.core.pipes import PipeTable
+from zeos.core.pipes import Pipe, PipeTable
 from zeos.core.principals import (
     KERNEL_PRINCIPAL,
     Elevation,
@@ -624,6 +625,21 @@ class Kernel:
             return
         self._deliver_now(pipe_name, text)
         _ = principal  # provenance is stamped at INJECT, from the pipe's binding
+
+    def drain(self, pipe_name: PipeName) -> tuple[Token, ...]:
+        """The driver takes everything a job wrote to a sink out to the world.
+
+        The mirror of ``deliver``: the write was checked and journalled when it landed,
+        so what leaves here is only what the kernel let in, and a writer parked on the
+        full sink is woken now that there is room.
+        """
+        pipe = self.pipes.get(pipe_name)
+        if not pipe.spec.sink:
+            raise KernelError(f"{pipe_name} is not a sink; only a sink can be drained")
+        tokens = pipe.read()
+        self._emit(PipeDrained(clock=self.clock, pipe=pipe_name, tokens=len(tokens)))
+        self._wake_writers(pipe)
+        return tokens
 
     def _deliver_now(self, pipe_name: PipeName, text: str) -> None:
         pipe = self.pipes.ensure(pipe_name)
@@ -1293,6 +1309,20 @@ class Kernel:
 
     def _do_read(self, job: Job, pipe_name: PipeName) -> None:
         pipe = self.pipes.ensure(pipe_name)
+        if pipe.spec.sink:
+            self._raise_fault(
+                job,
+                Fault(
+                    kind=FaultKind.CAPABILITY,
+                    job=job.job_id,
+                    detail=(
+                        f"{pipe_name} is a sink, drained for the outside world; "
+                        "a job may not read it"
+                    ),
+                    pipe=pipe_name,
+                ),
+            )
+            return
         if not pipe.readable:
             pipe.block_reader(job.job_id)
             self._block(job)
@@ -2348,18 +2378,7 @@ class Kernel:
         gate = self.gates.by_request_pipe(pipe_name)
         if gate is not None:
             self._pump_queued_deliveries(gate)
-        # Space freed: anyone blocked writing to this pipe may now proceed.
-        for woken in self.sched.wake_all(pipe.take_waiting_writers()):
-            self._release_priority_inheritance(woken)
-            self._emit(JobWoken(clock=self.clock, job=woken.job_id, pipe=pipe_name))
-            self._emit(
-                JobStateChanged(
-                    clock=self.clock,
-                    job=woken.job_id,
-                    from_state=JobState.BLOCKED,
-                    to_state=JobState.READY,
-                )
-            )
+        self._wake_writers(pipe)
 
     def _do_write(
         self,
@@ -2798,6 +2817,20 @@ class Kernel:
             self._do_read(job, pipe_name)
             return True
         return False
+
+    def _wake_writers(self, pipe: Pipe) -> None:
+        """Space freed: anyone blocked writing to this pipe may now proceed."""
+        for woken in self.sched.wake_all(pipe.take_waiting_writers()):
+            self._release_priority_inheritance(woken)
+            self._emit(JobWoken(clock=self.clock, job=woken.job_id, pipe=pipe.name))
+            self._emit(
+                JobStateChanged(
+                    clock=self.clock,
+                    job=woken.job_id,
+                    from_state=JobState.BLOCKED,
+                    to_state=JobState.READY,
+                )
+            )
 
     def _wake_readers(self, pipe_name: PipeName) -> None:
         # A pinned job has never run, so it is not among the pipe's blocked readers:

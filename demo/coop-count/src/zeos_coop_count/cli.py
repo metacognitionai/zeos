@@ -17,7 +17,7 @@ from types import FrameType
 
 from collections.abc import Sequence
 
-from zeos.core.events import Event, JobBlocked, JobWoken
+from zeos.core.events import Event, JobBlocked, JobWoken, PipeWritten
 from zeos.core.ids import DescriptorName, JobId, PipeName
 from zeos.core.kernel import KernelConfig
 from zeos.descriptor.lint import Severity, lint
@@ -25,7 +25,7 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal
-from zeos.machine.base import MachineBackend, MachineRequest, OpKind, TracesRaw, render
+from zeos.machine.base import MachineBackend, MachineRequest, OpKind, TracesRaw
 from zeos.machine.seat import CommandSeat, CommandSource, TapeSource, seat_maps
 from zeos.trace import RawTrace
 
@@ -148,10 +148,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             armed = head == "say" and rest.strip().isdigit() and int(rest.strip()) >= said_at
         who = f"{name_of(job):<10}"
         if request.op is OpKind.WRITE:
-            print(
-                f"{who} \u2500\u2500\u25b6 {resolve(job, request.pipe):<12} {render(request.payload)}",
-                flush=True,
-            )
+            # Printed from the journal once the kernel has checked and landed it.
+            pass
         elif request.op is OpKind.READ:
             # Silent on purpose: whether a read waits is the kernel's call, and it has not
             # made it yet.
@@ -167,7 +165,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     def drain(seen: int) -> int:
         """Print the facts only the kernel knows, in the order the journal recorded them."""
         for event in events[seen:]:
-            if isinstance(event, JobBlocked):
+            if isinstance(event, PipeWritten) and event.job is not None:
+                who = f"{name_of(event.job):<10}"
+                print(
+                    f"{who} \u2500\u2500\u25b6 {event.pipe:<12} {' '.join(event.text)}", flush=True
+                )
+            elif isinstance(event, JobBlocked):
                 print(f"{name_of(event.job):<10} ... waiting on {event.pipe}", flush=True)
         return len(events)
 

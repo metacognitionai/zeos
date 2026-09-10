@@ -132,6 +132,7 @@ def lint(
     opts = options or LintOptions()
     findings: list[Finding] = []
     declared_pipes = {p.name for p in pipes}
+    sinks = {p.name for p in pipes if p.sink}
 
     rings = {p.name: p.ring for p in pipes}
 
@@ -140,6 +141,7 @@ def lint(
         findings.extend(_check_masking(d, opts))
         findings.extend(_check_children(d, descriptors))
         findings.extend(_check_pipes(d, declared_pipes))
+        findings.extend(_check_sink_read(d, sinks))
         findings.extend(_check_fault_handler(d, descriptors))
         findings.extend(_check_completion(d, descriptors))
         findings.extend(_check_confused_deputy(d, rings, descriptors))
@@ -254,6 +256,23 @@ def _check_pipes(d: Descriptor, declared: Container[str]) -> list[Finding]:
         )
         for pipe in d.pipes.all_names()
         if pipe not in declared
+    ]
+
+
+def _check_sink_read(d: Descriptor, sinks: Container[str]) -> list[Finding]:
+    stdin = d.pipes.stdin
+    if stdin is None or stdin not in sinks:
+        return []
+    return [
+        Finding(
+            rule="sink-is-read",
+            severity=Severity.ERROR,
+            detail=(
+                f"binds sink {stdin!r} as stdin, but a sink is drained by the driver for the "
+                "outside world; a job reading it would race the drain"
+            ),
+            descriptor=d.name,
+        )
     ]
 
 
