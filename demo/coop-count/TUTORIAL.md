@@ -377,9 +377,11 @@ much as on the instruction. `Qwen3.5-4B` counts reliably in ordinary running but
 count past its target when resuming after an interrupt; Claude (`--machine claude`) works
 the target out from the status line and stops where it should.
 
-Only the suspended job gets a notice. The peer is blocked rather than suspended, and ZEOS
-does not tell a blocked job that its read-set has moved; it finds out by reading its
-status line on its next turn.
+The displaced job is not the only one told. A job asleep on its pipe whose read-set moved
+while it slept gets the same notice when it wakes, opening with `Waited` rather than
+`Suspended`: after a reset to 500, the counter that was waiting wakes to find its peer has
+already moved on to 510, and is told `500 -> 510`. Either way the job takes its number
+from the status line; the notice is only the signal that something moved.
 
 ---
 

@@ -117,14 +117,28 @@ def test_the_handler_writes_the_typed_number_to_world_state(run: list[Event]) ->
 
 
 def test_a_resumed_job_is_told_what_changed_underneath_it(run: list[Event]) -> None:
-    """A dirty resume names the objects that changed and carries the new value."""
+    """Two kinds of dirty notice, told apart by ``waited``.
+
+    A job the handler displaced is told the typed number when it resumes. The handler
+    preempts twice -- once on the keypress, once when the number arrives -- and only the
+    second displaces a job at the moment the count is reset, so the job told is whichever
+    was running then, not necessarily the one the keypress landed on. A job that was
+    asleep on its pipe is told, when it wakes, what moved while it slept -- and by then
+    its peer has counted on from the reset, so that notice carries the peer's new count
+    rather than the typed number.
+    """
     dirty = [r for r in _of(run, JobResumed) if r.resume_kind is ResumeKind.DIRTY]
     assert dirty, "the counters depend on state the handler changed"
-
     for resume in dirty:
-        changed = {d.obj: (d.before, d.after) for d in resume.dirty}
-        assert changed, "a dirty resume must name what changed"
-        assert NEW_COUNT in {after for _, after in changed.values()}
+        assert resume.dirty, "a dirty resume must name what changed"
+
+    preempted = {p.job for p in _of(run, JobPreempted)}
+    displaced = [r for r in dirty if not r.waited]
+    assert displaced and {r.job for r in displaced} <= preempted
+    assert NEW_COUNT in {d.after for r in displaced for d in r.dirty}
+
+    woken = [r for r in dirty if r.waited]
+    assert woken, "the peer wakes from its pipe to a count that moved while it slept"
 
 
 def test_the_interrupted_job_resumes_before_its_peer_runs_again(run: list[Event]) -> None:
