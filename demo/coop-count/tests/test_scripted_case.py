@@ -23,12 +23,9 @@ from zeos.core.events import (
 from zeos.core.ids import ResumeKind
 from zeos.core.kernel import KernelConfig
 from zeos.descriptor.loader import load_case, split_frontmatter
-from zeos.driver import Driver, load_schedule
+from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.codec import to_line
-
-from zeos_coop_count.boot import build_kernel
-from zeos_coop_count.scripted import TapeSource
-from zeos_coop_count.seat import CommandSeat
+from zeos.machine.seat import CommandSeat, TapeSource
 
 CASE = Path(__file__).resolve().parent.parent / "cases" / "coop-count-scripted"
 
@@ -40,9 +37,10 @@ def play() -> list[Event]:
     """One whole run of the case: the tapes, the scheduled keypress, and nothing else."""
     bundle = load_case(CASE)
     events: list[Event] = []
-    kernel, _transport, machine = build_kernel(
+    machine = CommandSeat(source=TapeSource(bundle.scripts))
+    kernel, _transport = build_kernel(
         bundle,
-        machine=CommandSeat(source=TapeSource(bundle.scripts)),
+        machine=machine,
         journal_sink=events,
         config=KernelConfig(case=bundle.name),
     )
@@ -61,7 +59,7 @@ def play() -> list[Event]:
         now += Driver.DEFAULT_NS_PER_TICK
         if not ran and not pending:
             break
-    machine.close()  # pyright: ignore[reportAttributeAccessIssue]
+    machine.close()
     return events
 
 

@@ -41,7 +41,7 @@ from zeos.core.resources import ResourceTable
 from zeos.core.vectors import VectorTable
 from zeos.descriptor.loader import CaseBundle
 from zeos.journal.writer import Journal
-from zeos.machine.base import TracesRaw
+from zeos.machine.base import MachineBackend, TracesRaw
 from zeos.machine.scripted import ScriptedMachine
 from zeos.trace import RawTrace
 from zeos.transport.base import PipeTransport
@@ -98,12 +98,14 @@ def load_schedule(path: Path) -> tuple[ScheduledEvent, ...]:
 def build_kernel(
     bundle: CaseBundle,
     *,
+    machine: MachineBackend | None = None,
     journal_sink: list[Event] | None = None,
     config: KernelConfig | None = None,
     block_size: int = 16,
 ) -> tuple[Kernel, PipeTransport]:
-    """Assemble a kernel from a loaded case."""
-    machine = ScriptedMachine(bundle.scripts, block_size=block_size)
+    """Assemble a kernel from a loaded case, on the case's own scripts unless a machine is given."""
+    if machine is None:
+        machine = ScriptedMachine(bundle.scripts, block_size=block_size)
     pipes = PipeTable(bundle.pipes)
     world = WorldStore()
     kernel = Kernel(

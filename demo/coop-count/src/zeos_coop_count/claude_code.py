@@ -21,9 +21,10 @@ import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 
+from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.seat import Turn
+
 from zeos_coop_count.claude import one_command, prompt_for, system_for
-from zeos_coop_count.seat import Turn
-from zeos_coop_count.syscall import ALIASES
 
 __all__ = ["ClaudeCodeSource", "DEFAULT_MODEL"]
 
@@ -40,10 +41,12 @@ class ClaudeCodeSource:
         self,
         *,
         model: str = DEFAULT_MODEL,
+        abi: SyscallABI = DEFAULT,
         descriptors: Mapping[str, Sequence[str]] | None = None,
         valued: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         self._model = model
+        self._abi = abi
         # `claude --print` reads the CLAUDE.md of the directory it starts in and puts it
         # in the model's context, whatever `--system-prompt` says. A job's context is its
         # descriptor and what arrived on its pipes, so the process is run from an empty
@@ -57,7 +60,9 @@ class ClaudeCodeSource:
     def next_command(self, turn: Turn) -> str:
         """One ``claude --print`` call, giving one command."""
         system = system_for(
-            self._aliases.get(turn.descriptor, ALIASES), self._valued.get(turn.descriptor, ())
+            self._aliases.get(turn.descriptor, self._abi.aliases),
+            self._valued.get(turn.descriptor, ()),
+            abi=self._abi,
         )
         result = subprocess.run(
             [
@@ -76,7 +81,7 @@ class ClaudeCodeSource:
                 "--output-format",
                 "text",
             ],
-            input=prompt_for(turn),
+            input=prompt_for(turn, abi=self._abi),
             capture_output=True,
             text=True,
             timeout=120,
@@ -87,4 +92,4 @@ class ClaudeCodeSource:
                 f"claude --print exited {result.returncode} for job {turn.job}: "
                 f"{result.stderr.strip()}"
             )
-        return one_command(result.stdout.strip())
+        return one_command(result.stdout.strip(), abi=self._abi)

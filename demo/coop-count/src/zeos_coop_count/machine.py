@@ -30,8 +30,10 @@ from zeos.machine.base import (
     SpliceResult,
     Token,
 )
-from zeos_coop_count.seat import SyscallSeat
-from zeos_coop_count.syscall import SyscallParser, build_grammar
+from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.seat import SyscallParser, SyscallSeat
+
+from zeos_coop_count.grammar import build_grammar
 
 __all__ = ["LlamaModel", "LlamaMachine", "PAD_TOKEN", "DEFAULT_BLOCK_SIZE"]
 
@@ -100,6 +102,7 @@ class _Context:
 
     seq: int
     descriptor: str
+    parser: SyscallParser
     #: The kernel-visible token sequence T.
     tokens: list[Token] = field(default_factory=list[Token])
     #: The llama token ids backing T, flat.
@@ -119,7 +122,6 @@ class _Context:
     n_in_kv: int = 0
     mask: frozenset[int] | None = None
     sampler: object | None = None
-    parser: SyscallParser = field(default_factory=SyscallParser)
     grammar: str = ""
     #: Tags for the attention hint, naming what this step most likely attends to.
     tags: tuple[str, ...] = ()
@@ -143,6 +145,7 @@ class LlamaMachine(SyscallSeat):
         self,
         model: LlamaModel,
         *,
+        abi: SyscallABI = DEFAULT,
         descriptors: Mapping[str, Sequence[str]] | None = None,
         valued: Mapping[str, Sequence[str]] | None = None,
         block_size: int = DEFAULT_BLOCK_SIZE,
@@ -156,6 +159,7 @@ class LlamaMachine(SyscallSeat):
         on_arrival: Callable[[JobId, str], None] | None = None,
     ) -> None:
         super().__init__(
+            abi=abi,
             descriptors=descriptors,
             valued=valued,
             on_command=on_command,
@@ -243,8 +247,12 @@ class LlamaMachine(SyscallSeat):
         if not self._free_seqs:
             raise RuntimeError("out of llama sequences; raise n_seq_max")
         seq = self._free_seqs.pop(0)
-        ctx = _Context(seq=seq, descriptor=descriptor, tags=("descriptor",))
-        ctx.grammar = build_grammar(self.aliases(descriptor), valued=self.valued(descriptor))
+        ctx = _Context(
+            seq=seq, descriptor=descriptor, parser=SyscallParser(self.abi), tags=("descriptor",)
+        )
+        ctx.grammar = build_grammar(
+            self.abi, self.aliases(descriptor), valued=self.valued(descriptor)
+        )
         self._build_sampler(ctx)
         self._contexts[job] = ctx
 
@@ -531,7 +539,7 @@ class LlamaMachine(SyscallSeat):
         tail_spans = ctx.spans[end:]
         tail_framing = ctx.framing[end:]
 
-        head = _Context(seq=ctx.seq, descriptor=ctx.descriptor)
+        head = _Context(seq=ctx.seq, descriptor=ctx.descriptor, parser=ctx.parser)
         head.ids = ctx.ids[:kv_start]
         new_tokens, new_ids, new_spans = self._encode(tokens, head)
 

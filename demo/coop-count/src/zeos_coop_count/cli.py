@@ -23,16 +23,16 @@ from zeos.core.kernel import KernelConfig
 from zeos.descriptor.lint import Severity, lint
 from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
-from zeos.driver import Driver, load_schedule
+from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal
-from zeos.machine.base import MachineRequest, OpKind, TracesRaw, render
+from zeos.machine.base import MachineBackend, MachineRequest, OpKind, TracesRaw, render
+from zeos.machine.seat import CommandSeat, CommandSource, TapeSource, seat_maps
 from zeos.trace import RawTrace
 
 from zeos_coop_count import model as model_mod
-from zeos_coop_count.boot import build_kernel, seat_maps
+from zeos_coop_count.boot import llama_machine
 from zeos_coop_count.keyboard import Console
 from zeos_coop_count.machine import LlamaModel
-from zeos_coop_count.seat import CommandSeat, CommandSource
 
 __all__ = ["main"]
 
@@ -171,13 +171,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 print(f"{name_of(event.job):<10} ... waiting on {event.pipe}", flush=True)
         return len(events)
 
+    machine: MachineBackend
     if args.machine in ("scripted", "claude", "claude-code"):
-        descriptors, valued = seat_maps(bundle)
+        descriptors, valued = seat_maps(bundle.descriptors, bundle.pipes)
         chosen = {"model": args.seat_model} if args.seat_model else {}
         source: CommandSource
         if args.machine == "scripted":
-            from zeos_coop_count.scripted import TapeSource
-
             source = TapeSource(bundle.scripts)
         elif args.machine == "claude":
             from zeos_coop_count.claude import ClaudeSource
@@ -187,30 +186,29 @@ def _cmd_run(args: argparse.Namespace) -> int:
             from zeos_coop_count.claude_code import ClaudeCodeSource
 
             source = ClaudeCodeSource(descriptors=descriptors, valued=valued, **chosen)
-        seat = CommandSeat(
+        machine = CommandSeat(
             source=source,
             block_size=args.block_size,
             on_command=on_command,
             on_arrival=on_arrival,
         )
-        kernel, transport, machine = build_kernel(
-            bundle,
-            machine=seat,
-            journal_sink=events,
-            config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
-        )
     else:
-        kernel, transport, machine = build_kernel(
+        assert model is not None
+        machine = llama_machine(
             bundle,
             model,
-            journal_sink=events,
-            config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
             block_size=args.block_size,
             n_ctx=args.n_ctx,
             n_threads=args.threads,
             on_command=on_command,
             on_arrival=on_arrival,
         )
+    kernel, transport = build_kernel(
+        bundle,
+        machine=machine,
+        journal_sink=events,
+        config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
+    )
     kernel_box.append(kernel)
 
     journal = Journal(Path(args.journal) if args.journal else None)

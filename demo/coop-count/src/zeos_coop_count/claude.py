@@ -8,14 +8,13 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from anthropic import Anthropic
 
-from zeos_coop_count.seat import Turn
-from zeos_coop_count.syscall import ALIASES, MAX_TEXT
+from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.seat import Turn
 
 __all__ = ["ClaudeSource", "DEFAULT_MODEL", "one_command", "prompt_for", "system_for"]
 
@@ -31,12 +30,9 @@ You are a job running under ZEOS, a transformer operating system. Your context i
 own: it opens with your goal, and everything after it is either something you said or
 something that arrived on a pipe.
 
-Reply with exactly ONE command and nothing else. Every command ends with a semicolon.
+Reply with exactly ONE command and nothing else. Every command ends with `{terminator}`.
 
-    say <text>;             think out loud. No effect, and nobody reads it
-    write <pipe> <text>;    put text on a pipe. This is how anything happens
-    read <pipe>;            sleep until something arrives on that pipe
-    exit;                   finish
+{commands}
 
 The only pipes you may name are: {aliases}. Naming any other is refused by the kernel.
 {valued}
@@ -52,16 +48,12 @@ _VALUED = "These pipes carry a value rather than prose, so write them a bare num
 #: The turn that asks for the next command, so the prompt does not end on an assistant turn.
 _ASK = "You have the machine. Your next command:"
 
-#: One completed command in the reply; anything the model adds around it is dropped.
-_COMMAND = re.compile(
-    r"\b(say|write|read|exit)\b([^;]*);",
-    re.IGNORECASE,
-)
 
-
-def system_for(aliases: Sequence[str], valued: Sequence[str]) -> str:
+def system_for(aliases: Sequence[str], valued: Sequence[str], *, abi: SyscallABI = DEFAULT) -> str:
     """The ABI as one descriptor sees it: only the pipes it binds, and which carry a number."""
     return SYSTEM.format(
+        terminator=abi.terminator,
+        commands=abi.prose(),
         aliases=", ".join(aliases) or "none",
         valued=_VALUED.format(names=", ".join(valued)) if valued else "",
     )
@@ -71,19 +63,24 @@ def system_for(aliases: Sequence[str], valued: Sequence[str]) -> str:
 #: transcript. Without it a model reissues the command it has just issued: the goal's
 #: own closing line ("your next command is `say 1;`") stays literally true-looking for
 #: ever, and its own working is words in the same undifferentiated run of text.
-_DONE = "Your last command was `{last};` and it is done. Do not issue it again."
+_DONE = "Your last command was `{last}{terminator}` and it is done. Do not issue it again."
 
 
-def prompt_for(turn: Turn) -> str:
-    done = f"{_DONE.format(last=turn.last)}\n\n" if turn.last else ""
+def prompt_for(turn: Turn, *, abi: SyscallABI = DEFAULT) -> str:
+    done = f"{_DONE.format(last=turn.last, terminator=abi.terminator)}\n\n" if turn.last else ""
     return f"{turn.transcript}\n\n{done}{_ASK}"
 
 
-def one_command(text: str) -> str:
-    """The single command in a reply. A reply with none in it is recorded as a ``say``."""
-    match = _COMMAND.search(text)
+def one_command(text: str, *, abi: SyscallABI = DEFAULT) -> str:
+    """The single command in a reply; anything the model adds around it is dropped.
+
+    A reply with no command in it is recorded as the ABI's first request-free verb, so
+    the words stay in the transcript without asking the kernel for anything.
+    """
+    match = abi.pattern().search(text)
     if match is None:
-        return f"say {' '.join(text.split()[:MAX_TEXT]) or 'nothing'}"
+        words = text.split()[: abi.max_text] if abi.max_text is not None else text.split()
+        return f"{abi.lines[0].name} {' '.join(words) or 'nothing'}"
     return f"{match.group(1).lower()}{match.group(2).rstrip()}"
 
 
@@ -94,23 +91,31 @@ class ClaudeSource:
         self,
         *,
         model: str = DEFAULT_MODEL,
+        abi: SyscallABI = DEFAULT,
         descriptors: Mapping[str, Sequence[str]] | None = None,
         valued: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         # One call per command, so a long run makes many and needs more than two retries.
         self._client = Anthropic(max_retries=6)
         self._model = model
+        self._abi = abi
         self._aliases: dict[str, tuple[str, ...]] = {
             k: tuple(v) for k, v in (descriptors or {}).items()
         }
         self._valued: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in (valued or {}).items()}
 
     def system(self, descriptor: str) -> str:
-        return system_for(self._aliases.get(descriptor, ALIASES), self._valued.get(descriptor, ()))
+        return system_for(
+            self._aliases.get(descriptor, self._abi.aliases),
+            self._valued.get(descriptor, ()),
+            abi=self._abi,
+        )
 
     def next_command(self, turn: Turn) -> str:
         """One API call, giving one command."""
-        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt_for(turn)}]
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": prompt_for(turn, abi=self._abi)}
+        ]
         # Server-side fallback is offered on some models and refused with a 400 on
         # others, so it is asked for only on the default this seat was written against.
         served = (
@@ -134,4 +139,4 @@ class ClaudeSource:
             raise RuntimeError(
                 f"no text in the response for job {turn.job} (stop_reason={response.stop_reason})"
             )
-        return one_command(text.strip())
+        return one_command(text.strip(), abi=self._abi)

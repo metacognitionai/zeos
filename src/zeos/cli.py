@@ -41,6 +41,7 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, read_journal
+from zeos.machine.seat import CommandSeat, TapeSource
 from zeos.trace import RawTrace, read_trace
 
 __all__ = ["main"]
@@ -89,8 +90,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     events: list[Event] = []
+    machine = (
+        CommandSeat(source=TapeSource(bundle.scripts), block_size=args.block_size)
+        if args.machine == "seat"
+        else None
+    )
     kernel, transport = build_kernel(
         bundle,
+        machine=machine,
         journal_sink=events,
         config=KernelConfig(seed=args.seed, case=bundle.name),
         block_size=args.block_size,
@@ -299,6 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--block-size", type=int, default=16)
+    p_run.add_argument(
+        "--machine",
+        choices=("scripted", "seat"),
+        default="scripted",
+        help="what answers each decode: the case's scripts step by step, or the same "
+        "scripts spoken as syscall commands through the seat, one word per decode",
+    )
     p_run.add_argument("--force", action="store_true", help="run despite lint errors")
     p_run.set_defaults(func=_cmd_run)
 

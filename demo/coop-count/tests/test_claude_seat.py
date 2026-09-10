@@ -14,8 +14,9 @@ import pytest
 
 from zeos.core.ids import JobId, TokenKind
 from zeos.machine.base import OpKind
+from zeos.machine.seat import CommandSeat, Turn
+
 from zeos_coop_count.claude import one_command
-from zeos_coop_count.seat import CommandSeat, Turn
 
 JOB = JobId(1)
 

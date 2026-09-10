@@ -54,7 +54,9 @@ src/zeos/
 │   └── kernel.py            the state machine -- tick(), ~1400 lines
 ├── machine/
 │   ├── base.py              THE BACKEND SWAP POINT -- five ops + serving contract
-│   └── scripted.py          scripted streams, blocks, synthetic attention
+│   ├── scripted.py          scripted streams, blocks, synthetic attention
+│   ├── abi.py               the syscall ABI a model speaks, declared once as data
+│   └── seat.py              the seat: one word per decode, parser, transcript rebuild
 ├── descriptor/
 │   ├── schema.py            frontmatter → Descriptor, strict parsing
 │   ├── loader.py            markdown + YAML, case directories

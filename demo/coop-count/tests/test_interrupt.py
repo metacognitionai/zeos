@@ -24,10 +24,10 @@ from zeos.core.events import (
 from zeos.core.ids import JobState, PipeName, ResumeKind
 from zeos.core.kernel import KernelConfig
 from zeos.descriptor.loader import load_case
-from zeos.driver import Driver
+from zeos.driver import Driver, build_kernel
 
-from zeos_coop_count.boot import build_kernel
 from zeos_coop_count import model as model_mod
+from zeos_coop_count.boot import llama_machine
 from zeos_coop_count.machine import LlamaModel
 
 CASE = Path(__file__).resolve().parent.parent / "cases" / "coop-count-pipe"
@@ -43,12 +43,12 @@ def run(request: pytest.FixtureRequest) -> list[Event]:
     model: LlamaModel = request.getfixturevalue("llama_model")
     bundle = load_case(CASE)
     events: list[Event] = []
-    kernel, _transport, machine = build_kernel(
+    machine = llama_machine(bundle, model, n_threads=model_mod.DEFAULT_THREADS)
+    kernel, _transport = build_kernel(
         bundle,
-        model,
+        machine=machine,
         journal_sink=events,
         config=KernelConfig(case=bundle.name),
-        n_threads=model_mod.DEFAULT_THREADS,
     )
     kernel.start()
     for name in bundle.boot:

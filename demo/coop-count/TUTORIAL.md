@@ -37,19 +37,20 @@ enough. What is in it:
 ```
 demo/coop-count/
 ├── src/zeos_coop_count/machine.py   runs the model, and implements MachineBackend
-├── src/zeos_coop_count/syscall.py   the command grammar, and the parser for it
-├── src/zeos_coop_count/seat.py      the parts machine.py and claude.py share
+├── src/zeos_coop_count/grammar.py   the syscall ABI rendered as a llama.cpp grammar
 ├── src/zeos_coop_count/claude.py    the same commands, answered by the Claude API
 ├── src/zeos_coop_count/model.py     downloads the weights
 ├── src/zeos_coop_count/keyboard.py  reads the keyboard and writes to a pipe
-├── src/zeos_coop_count/boot.py      builds a kernel with this machine in it
+├── src/zeos_coop_count/boot.py      builds this machine for a case
 ├── src/zeos_coop_count/cli.py       the zeos-count command
 ├── cases/coop-count-pipe/           the application: three descriptors, six pipes
 └── cases/coop-count-vector/         the same application, built with vectors
 ```
 
-This tutorial covers `machine.py`, `syscall.py` and `cases/coop-count-pipe/`. The README
-covers `claude.py` and the vector case.
+This tutorial covers `machine.py`, `grammar.py` and `cases/coop-count-pipe/`. The README
+covers `claude.py` and the vector case. The parts every seat shares -- the parser, the
+one-word-per-decode seat, and the ABI the commands come from -- live in the kernel
+package, in `zeos.machine.seat` and `zeos.machine.abi`.
 
 Install from the repository root, then work from this directory:
 
@@ -164,23 +165,27 @@ already owns, instead of adding tokens the kernel would see as belonging to no s
 ## Part 3 — The commands the model can emit
 
 A job's only effects are pipe writes and its only inputs are pipe reads. Both reach the
-kernel as a `MachineRequest` attached to a decode step. The grammar is how a stream of
-tokens becomes one: the request is not searched for in free text afterwards, it is the
-only thing the sampler can produce.
+kernel as a `MachineRequest` attached to a decode step. The commands themselves -- the
+verbs, what each asks the kernel for, the `;` that ends one, the payload cap -- are
+declared once, as a `SyscallABI` in `zeos.machine.abi`; the default there is the one
+this demo speaks. `grammar.py` renders that declaration as GBNF. The grammar is how a
+stream of tokens becomes a request: the request is not searched for in free text
+afterwards, it is the only thing the sampler can produce.
 
 ```gbnf
-root   ::= line* call
-line   ::= "say " text end
-call   ::= write | read | exit
-exit   ::= "exit" end
-read   ::= "read " pipe end
-pipe   ::= "stdin" | "stdout" | "tools"
-write  ::= "write " plain " " text end | "write " valued " " number end
-plain  ::= "stdin" | "stdout"
+root  ::= line* call
+line  ::= say
+call  ::= write | read | exit
+say   ::= "say " text end
+write ::= "write " plain " " text end | "write " valued " " number end
+read  ::= "read " readable end
+exit  ::= "exit" end
+plain ::= "stdin" | "stdout"
 valued ::= "tools"
 number ::= "0" | [1-9] [0-9]{0,8}
-text   ::= [^;<\n]{1,16}
-end    ::= "; "
+readable ::= "stdin" | "stdout" | "tools"
+text  ::= [^;<\n]{1,16}
+end   ::= "; "
 ```
 
 A job's whole vocabulary is `say 1; write stdout 10; read stdin; exit;`. Points worth
@@ -202,8 +207,8 @@ knowing:
 The terminator is `; ` rather than a newline because descriptor bodies are loaded through
 `tokens_from_text`, which splits on whitespace, so newlines never reach the model and it
 will not produce a character it has never seen. With a line-terminated grammar it emitted
-`say 2say 3say 4say 5`, four steps inside one decode. `MAX_TEXT` is 16 for the same
-reason: a longer text field lets a whole plan hide inside one command.
+`say 2say 3say 4say 5`, four steps inside one decode. The ABI's `max_text` is 16 for the
+same reason: a longer text field lets a whole plan hide inside one command.
 
 ---
 

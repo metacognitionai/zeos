@@ -1,0 +1,5 @@
+# One pipe, so the tape's write has somewhere to land.
+- name: ops.report
+  ring: TRUSTED
+  principal: user
+  capacity: 64
