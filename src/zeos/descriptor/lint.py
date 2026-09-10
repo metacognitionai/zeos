@@ -28,6 +28,7 @@ with on-demand maps, stub budgets, watermark sanity, working-set fit).
 from __future__ import annotations
 
 import enum
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -47,6 +48,7 @@ from zeos.core.principals import (
 from zeos.core.resources import ResourceSpec, lock_order_violations
 from zeos.core.vectors import VectorSpec
 from zeos.descriptor.schema import Descriptor
+from zeos.machine.abi import DEFAULT, SyscallABI
 from zeos.nli.compiler import Phrasebook, parse_phrasings
 
 __all__ = [
@@ -125,6 +127,7 @@ def lint(
     principals: PrincipalTable | None = None,
     gates: GateTable | None = None,
     options: LintOptions | None = None,
+    abi: SyscallABI = DEFAULT,
 ) -> tuple[Finding, ...]:
     opts = options or LintOptions()
     findings: list[Finding] = []
@@ -146,6 +149,7 @@ def lint(
         findings.extend(_check_resources(d, {r.name for r in resources}))
         findings.extend(_check_embodiment(d, platforms))
         findings.extend(_check_addressability(d, principals))
+        findings.extend(_check_body_commands(d, abi))
 
     findings.extend(_check_vectors(vectors, descriptors, declared_pipes, opts))
     findings.extend(_check_write_conflicts(descriptors))
@@ -251,6 +255,54 @@ def _check_pipes(d: Descriptor, declared: Container[str]) -> list[Finding]:
         for pipe in d.pipes.all_names()
         if pipe not in declared
     ]
+
+
+#: A backticked span in a body. Only those ending in the ABI's terminator are read as
+#: commands, so an object name or a pipe name in backticks is never mistaken for one.
+_BACKTICKED = re.compile(r"`([^`\n]+)`")
+
+
+def _check_body_commands(d: Descriptor, abi: SyscallABI) -> list[Finding]:
+    """The body is the one copy of the vocabulary written by hand.
+
+    The prompt for the API seat, the pattern its reply is searched with and the grammar
+    the llama seat samples under are all rendered from the ABI; the prose a case author
+    writes is not. A command the body names with a verb the ABI does not declare, or a
+    pipe the descriptor does not bind, teaches the model a word it can never use -- and
+    the failure at run time points nowhere near the body.
+    """
+    findings: list[Finding] = []
+    for span in _BACKTICKED.findall(d.body):
+        if not span.rstrip().endswith(abi.terminator):
+            continue
+        for command in span.split(abi.terminator):
+            words = command.split()
+            if not words:
+                continue
+            shown = f"`{' '.join(words)}{abi.terminator}`"
+            verb = abi.verb(words[0])
+            if verb is None:
+                findings.append(
+                    Finding(
+                        rule="unknown-body-verb",
+                        severity=Severity.ERROR,
+                        detail=f"body names {shown} but the ABI declares no verb {words[0]!r}",
+                        descriptor=d.name,
+                    )
+                )
+            elif verb.pipe and (len(words) < 2 or d.pipes.resolve(words[1]) is None):
+                named = f"pipe {words[1]!r}" if len(words) > 1 else "no pipe"
+                findings.append(
+                    Finding(
+                        rule="unbound-body-pipe",
+                        severity=Severity.ERROR,
+                        detail=(
+                            f"body names {shown} with {named}, which this descriptor does not bind"
+                        ),
+                        descriptor=d.name,
+                    )
+                )
+    return findings
 
 
 def _check_confused_deputy(
