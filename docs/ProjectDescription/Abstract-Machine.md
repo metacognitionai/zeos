@@ -337,12 +337,14 @@ A decode step may carry one request, which is how a job asks the kernel for some
 
 ```
 MachineRequest = (op, pipe, pipes, payload, segment, resource, text, read_pipe)
-OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RELEASE | SPAWN | EXIT
+OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RELEASE | SPAWN | EXIT | MALFORMED
 ```
 
 **MUST:** at most one request per decode step.
 
 **`WRITE_READ`** is one request that the kernel performs as two operations -- `pipe` is written, then `read_pipe` is read -- within a single `tick`, so no preemption check falls between them. It exists because the universal shape of a turn is *hand over, then sleep*, and splitting that across two ticks lets the peer the write just woke take the machine one command before the job would have yielded it anyway. Backends opt in by emitting it; one that keeps emitting separate `WRITE` and `READ` behaves exactly as before. The read half is performed only if the write half completed.
+
+**`MALFORMED`** is how a machine reports a command it closed but could not shape into a request -- a verb its ABI does not declare, or one missing the pipe it takes -- with the words in `text`. The kernel raises a `malformed_request` fault from it, so the job is told and the journal says so; a machine that dropped such a command would leave the kernel unable to tell it from a job thinking out loud. A backend that constrains sampling to its ABI never emits it.
 
 **There is deliberately no YIELD.** From the interface's own comment: *jobs cannot volunteer scheduling decisions.* Scheduling is the kernel's, entirely. A job blocks because it read an empty pipe, waited on a resource, or faulted, and never because it decided to be polite. This is the whole difference between ZEOS and an agent loop, and it is enforced by the absence of a token in an enum, which is the cheapest possible place to enforce it.
 

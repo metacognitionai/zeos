@@ -206,6 +206,7 @@ class FaultKind(enum.StrEnum):
     DEADLINE = "deadline_fault"
     STARVATION = "scheduler_fault_starvation"
     TOOL_ERROR = "tool_error"
+    MALFORMED = "malformed_request"  # not a request at all; kept apart from CAPABILITY as GATE is
     DEADLOCK = "scheduler_fault_deadlock"
     # ZEOS-NLI
     #: An action gate refused an actuation on semantic grounds. Distinct

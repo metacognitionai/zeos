@@ -65,7 +65,7 @@ def drain(machine, job, stop="read", limit=400):
         ("read stdin;", "read", "stdin", []),
         ("write stdout go now;", "write", "stdout", ["go", "now"]),
         ("exit;", "exit", None, []),
-        ("say something;", "none", None, []),
+        ("say something;", "malformed", None, []),
     ],
 )
 def test_the_text_abi_reads_a_clause(clause, op, pipe, payload):

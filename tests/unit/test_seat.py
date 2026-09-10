@@ -90,13 +90,16 @@ def test_each_declared_verb_asks_for_its_op() -> None:
     assert DEFAULT.parse("say 41").op is OpKind.NONE
 
 
-def test_an_undeclared_verb_asks_for_nothing() -> None:
-    assert DEFAULT.parse("shove stdout hello").op is OpKind.NONE
+def test_an_undeclared_verb_is_a_malformed_request_carrying_the_words() -> None:
+    request = DEFAULT.parse("shove stdout hello;")
+    assert request.op is OpKind.MALFORMED
+    assert request.text == "shove stdout hello"
 
 
-def test_a_call_missing_its_pipe_asks_for_nothing() -> None:
-    assert DEFAULT.parse("write").op is OpKind.NONE
-    assert DEFAULT.parse("read").op is OpKind.NONE
+def test_a_call_missing_its_pipe_is_a_malformed_request() -> None:
+    assert DEFAULT.parse("write").op is OpKind.MALFORMED
+    assert DEFAULT.parse("read").op is OpKind.MALFORMED
+    assert DEFAULT.parse("write").text == "write"
 
 
 def test_a_verb_is_recognised_whatever_its_case() -> None:
@@ -192,7 +195,7 @@ def test_a_seat_speaks_whatever_abi_it_is_given() -> None:
 
 def test_a_seat_knows_no_words_but_its_own() -> None:
     seat, _ = _seat(["write stdout hello;"], abi=CUSTOM)
-    assert all(op is OpKind.NONE for op in _drive(seat, 3))
+    assert _drive(seat, 3) == [OpKind.NONE, OpKind.NONE, OpKind.MALFORMED]
     assert seat.lines(JOB) == ("write stdout hello;",)
 
 

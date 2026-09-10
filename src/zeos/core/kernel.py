@@ -1224,6 +1224,19 @@ class Kernel:
         match request.op:
             case OpKind.NONE:
                 return
+            case OpKind.MALFORMED:
+                self._raise_fault(
+                    job,
+                    Fault(
+                        kind=FaultKind.MALFORMED,
+                        job=job.job_id,
+                        detail=(
+                            f"{request.text!r} is not a command this job can issue: no such "
+                            "verb, or a verb without the pipe it takes"
+                        ),
+                    ),
+                )
+                return
             case OpKind.READ | OpKind.WRITE | OpKind.WRITE_READ:
                 read_after_write = request.read_pipe
                 if request.pipe is None or (

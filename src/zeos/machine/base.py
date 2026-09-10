@@ -116,6 +116,7 @@ class OpKind(enum.StrEnum):
     WRITE_READ = "write_read"  # hand over and sleep, with no boundary between
     FAULT = "fault"  # reference to a stub handle
     NEED = "need"  # structured request for content believed to exist
+    MALFORMED = "malformed"  # a closed command the machine could not shape; text has the words
     ACQUIRE = "acquire"  # take a resource; blocks if full
     RELEASE = "release"  # give it back
     SPAWN = "spawn"  # start a child job

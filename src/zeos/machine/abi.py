@@ -84,22 +84,21 @@ class SyscallABI:
         return tuple(v for v in self.verbs if v.op is not OpKind.NONE)
 
     def parse(self, line: str) -> MachineRequest:
-        """The request one completed command asks for, or an empty one.
-
-        A verb the ABI does not declare, or a call missing the pipe it needs, gives an
-        empty request: the words stay in the transcript as the job's own, and nothing is
-        asked of the kernel.
-        """
-        head, _, rest = line.strip().rstrip(self.terminator).strip().partition(" ")
+        """The request one completed command asks for; an undeclared verb, or a pipe verb
+        with no pipe, is a ``MALFORMED`` request carrying the words."""
+        command = line.strip().rstrip(self.terminator).strip()
+        head, _, rest = command.partition(" ")
         verb = self.verb(head)
-        if verb is None or verb.op is OpKind.NONE:
+        if verb is None:
+            return MachineRequest(op=OpKind.MALFORMED, text=command)
+        if verb.op is OpKind.NONE:
             return MachineRequest()
         rest = rest.strip()
         pipe: str | None = None
         if verb.pipe:
             pipe, _, rest = rest.partition(" ")
             if not pipe:
-                return MachineRequest()
+                return MachineRequest(op=OpKind.MALFORMED, text=command)
         payload = tokens_from_text(rest.strip()) if verb.text else ()
         return MachineRequest(
             op=verb.op, pipe=PipeName(pipe) if pipe is not None else None, payload=payload

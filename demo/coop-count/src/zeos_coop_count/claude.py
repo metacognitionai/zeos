@@ -72,15 +72,10 @@ def prompt_for(turn: Turn, *, abi: SyscallABI = DEFAULT) -> str:
 
 
 def one_command(text: str, *, abi: SyscallABI = DEFAULT) -> str:
-    """The single command in a reply; anything the model adds around it is dropped.
-
-    A reply with no command in it is recorded as the ABI's first request-free verb, so
-    the words stay in the transcript without asking the kernel for anything.
-    """
+    """The single command in a reply, or the whole reply as spoken if it holds none."""
     match = abi.pattern().search(text)
     if match is None:
-        words = text.split()[: abi.max_text] if abi.max_text is not None else text.split()
-        return f"{abi.lines[0].name} {' '.join(words) or 'nothing'}"
+        return " ".join(text.split()) or "nothing"
     return f"{match.group(1).lower()}{match.group(2).rstrip()}"
 
 
