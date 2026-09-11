@@ -32,6 +32,7 @@ from zeos.core.allocator import GangSpec, ReleasePolicy
 from zeos.core.capabilities import Capability, Schema, capabilities_from_spec
 from zeos.core.embodiment import EmbodimentRequirements
 from zeos.core.ids import (
+    KERNEL_PIPE,
     DescriptorName,
     EvictionPolicy,
     Integrity,
@@ -176,6 +177,12 @@ class PipeBindings:
             value = spec.get(key)
             return None if value is None else PipeName(str(value))
 
+        for alias, value in spec.items():
+            if PipeName(str(value)) == KERNEL_PIPE:
+                raise DescriptorError(
+                    f"{owner}: pipes.{alias} binds {str(KERNEL_PIPE)!r}, which is reserved "
+                    "for the kernel's own notices"
+                )
         return PipeBindings(
             stdin=get("stdin"), stdout=get("stdout"), tools=get("tools"), extra=extra
         )

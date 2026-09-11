@@ -28,7 +28,7 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from zeos.core.ids import JobId, PipeName, Principal, Ring
+from zeos.core.ids import KERNEL_PIPE, JobId, PipeName, Principal, Ring
 from zeos.machine.base import Token
 
 __all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "PipeFull", "DEFAULT_CAPACITY"]
@@ -69,6 +69,8 @@ class PipeSpec:
     sink: bool = False
 
     def __post_init__(self) -> None:
+        if self.name == KERNEL_PIPE:
+            raise PipeError(f"pipe {self.name!r} is reserved for the kernel's own notices")
         if self.sink and self.world_object:
             raise PipeError(f"pipe {self.name!r} cannot be both a sink and an actuator")
 
