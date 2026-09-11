@@ -96,7 +96,7 @@ def test_under_retry_the_job_is_told_and_carries_on() -> None:
 
     notices = _notices(events)
     assert len(notices) == 1 and "malformed_request" in notices[0]
-    assert "'shove stdout hello'" in notices[0]
+    assert "shove" not in notices[0], "the notice names the command; it does not quote it"
     written = [e for e in events if isinstance(e, PipeWritten) and e.pipe == REPORT]
     assert [" ".join(w.text) for w in written] == ["hello"], "the job went on to do its work"
     assert state is JobState.DONE

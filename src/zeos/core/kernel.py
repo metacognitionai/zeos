@@ -1250,6 +1250,10 @@ class Kernel:
                             f"{request.text!r} is not a command this job can issue: no such "
                             "verb, or a verb without the pipe it takes"
                         ),
+                        notice=(
+                            "your last command is not one this job can issue: no such verb, "
+                            "or a verb without the pipe it takes"
+                        ),
                     ),
                 )
                 return
@@ -2413,6 +2417,9 @@ class Kernel:
             )
         )
         if not check.allowed:
+            # A pipe the descriptor binds is the author's word; any other name is the
+            # model's, and the notice must not repeat it.
+            bound = pipe_name in job.descriptor.pipes.all_names()
             self._raise_fault(
                 job,
                 Fault(
@@ -2421,6 +2428,12 @@ class Kernel:
                     detail=check.detail + self._demotion_history(job),
                     segment=self._worst_attended_segment(job),
                     pipe=pipe_name,
+                    notice=None
+                    if bound
+                    else (
+                        "the pipe you named is not one this job may write"
+                        + self._demotion_history(job)
+                    ),
                 ),
             )
             return

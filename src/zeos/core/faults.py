@@ -40,6 +40,10 @@ class Fault:
     ``detail`` is written for a human reading the journal *and* for the model
     reading the notice; a fault that says only "privilege fault" forces both to go
     digging, which is the failure mode this design exists to avoid.
+
+    ``notice`` is set when the detail must not reach the model: a detail that quotes
+    words the model or a device chose would put those words into the context at
+    ring 0, framed as the kernel's. Notices name; they never quote.
     """
 
     kind: FaultKind
@@ -47,6 +51,7 @@ class Fault:
     detail: str
     segment: SegmentId | None = None
     pipe: PipeName | None = None
+    notice: str | None = None
 
     @property
     def is_hard(self) -> bool:
@@ -93,10 +98,13 @@ def render_notice(fault: Fault) -> str:
     . The framing is what carries authority; the body is prose.
     """
     parts = [f"<FAULT kind={fault.kind.value}>"]
-    parts.append(fault.detail)
-    if fault.segment is not None:
-        parts.append(f"offending segment: {fault.segment}")
-    if fault.pipe is not None:
-        parts.append(f"offending pipe: {fault.pipe}")
+    if fault.notice is not None:
+        parts.append(fault.notice)
+    else:
+        parts.append(fault.detail)
+        if fault.segment is not None:
+            parts.append(f"offending segment: {fault.segment}")
+        if fault.pipe is not None:
+            parts.append(f"offending pipe: {fault.pipe}")
     parts.append("</FAULT>")
     return " ".join(parts)
