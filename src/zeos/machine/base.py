@@ -149,10 +149,14 @@ class AttentionHint:
 
     This type exists to make the fiction visible in the type system. A real backend
     returns ``DecodeResult.attention`` and leaves this ``None``; only M0 populates
-    it. Anywhere this appears, policy conclusions are unavailable.
+    it. Anywhere this appears, policy conclusions are unavailable -- except that a
+    ``declared`` hint is a script's stipulation of what the model attended, and the
+    integrity rule takes it at its word. A backend's own guess is never declared, and
+    the kernel then demotes on provenance alone: everything the job could see.
     """
 
     tags: tuple[str, ...] = ()
+    declared: bool = False
     #: Fraction of total mass given to the tagged segments; the remainder is spread
     #: by recency. 1.0 means "this step attended the tagged content and nothing else".
     tag_weight: float = 0.8

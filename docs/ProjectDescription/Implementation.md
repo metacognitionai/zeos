@@ -21,7 +21,7 @@ maintained in the type system rather than in comments.
 | Block structure, alignment, padding | **Simulated but faithful** |
 | Control-token unforgeability | **Structural** -- a `CONTROL` token cannot be decoded unless the kernel enables it |
 | Eviction, stubs, page faults, store round trip | **Real mechanism** |
-| **Attention mass** | **Synthetic** -- the scripted backend cannot measure; the kernel resolves hints |
+| **Attention mass** | **Synthetic** -- the scripted backend cannot measure; the kernel resolves hints for paging, and demotes integrity on provenance alone unless a hint is a script's declared stipulation |
 
 Nothing about eviction regret, θ-parameter sensitivity, or taint-creep rates can be
 concluded from any run of this code. The mechanisms are validated; the policies are

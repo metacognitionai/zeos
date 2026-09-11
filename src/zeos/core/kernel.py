@@ -160,7 +160,12 @@ from zeos.core.ids import (
     TokenKind,
     VectorName,
 )
-from zeos.core.integrity import DEFAULT_THETA_READ, demote_for_boundary
+from zeos.core.integrity import (
+    DEFAULT_THETA_READ,
+    Demotion,
+    demote_by_provenance,
+    demote_for_boundary,
+)
 from zeos.core.pager import Pager, PagerResult, choose_plan
 from zeos.core.pcb import Job
 from zeos.core.pipes import Pipe, PipeFull, PipeTable
@@ -1144,8 +1149,10 @@ class Kernel:
                 if total > 0:
                     mass[record.id] = total
         else:
-            hint = result.attention_hint or AttentionHint()
-            mass = self._resolve_hint(job, hint)
+            hint = result.attention_hint
+            if result.tokens and (hint is None or not hint.declared):
+                job.attention_guessed = True
+            mass = self._resolve_hint(job, hint or AttentionHint())
 
         allowed = self.machine.visible_blocks(job.job_id)
         delivered: dict[SegmentId, float] = {}
@@ -1158,6 +1165,20 @@ class Kernel:
 
         job.segments.accumulate_attention(
             sorted(delivered.items()), token_clock=self.clock.token_clock
+        )
+
+    def _apply_demotion(self, job: Job, demotion: Demotion) -> None:
+        if not demotion.moved:
+            return
+        job.current_integrity = demotion.after
+        self._emit(
+            IntegrityDemoted(
+                clock=self.clock,
+                job=job.job_id,
+                from_integrity=demotion.before,
+                to_integrity=demotion.after,
+                because=demotion.because,
+            )
         )
 
     def _resolve_hint(self, job: Job, hint: AttentionHint) -> dict[SegmentId, float]:
@@ -1209,22 +1230,20 @@ class Kernel:
         self._emit(BlockBoundary(clock=self.clock, job=job.job_id, block=block, padding_tokens=0))
 
         if job.descriptor.integrity.is_dynamic:
-            demotion = demote_for_boundary(
-                job.current_integrity,
-                table=job.segments,
-                mass_this_block=this_block,
-                theta_read=self.config.theta_read,
-            )
-            if demotion.moved:
-                job.current_integrity = demotion.after
-                self._emit(
-                    IntegrityDemoted(
-                        clock=self.clock,
-                        job=job.job_id,
-                        from_integrity=demotion.before,
-                        to_integrity=demotion.after,
-                        because=demotion.because,
-                    )
+            if job.attention_guessed:
+                self._apply_demotion(
+                    job, demote_by_provenance(job.current_integrity, table=job.segments)
+                )
+                job.attention_guessed = False
+            else:
+                self._apply_demotion(
+                    job,
+                    demote_for_boundary(
+                        job.current_integrity,
+                        table=job.segments,
+                        mass_this_block=this_block,
+                        theta_read=self.config.theta_read,
+                    ),
                 )
         # Close the output segment at the boundary. The kernel closes output
         # at *every* scheduling boundary event -- any INJECT, any returning pipe read,
@@ -2474,6 +2493,13 @@ class Kernel:
             )
             return
         pipe = self.pipes.ensure(pipe_name)
+
+        # A write is a boundary too: what the job could see must count before it acts,
+        # not only at the next block.
+        if job.attention_guessed and job.descriptor.integrity.is_dynamic:
+            self._apply_demotion(
+                job, demote_by_provenance(job.current_integrity, table=job.segments)
+            )
 
         # Effects are syscalls. This check is the enforcement floor that
         # still holds when every layer above it has failed: a fully persuaded model

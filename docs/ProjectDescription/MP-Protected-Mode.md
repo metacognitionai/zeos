@@ -62,7 +62,7 @@ X=0 means "may inform, must not direct." This cannot be enforced inside the forw
 
 # 6. Integrity dynamics
 
-**Low-water-mark** (`core/integrity.py`): each job's `current_integrity` starts at its descriptor's level and falls to the level of what it reads -- demotion is attention-thresholded (mass ≥ θ_read), so merely *containing* dirt does not demote; *using* it does. Writes above the job's current level raise a **privilege fault** carrying the demotion history: which segments dragged it down, via which pipes.
+**Low-water-mark** (`core/integrity.py`): each job's `current_integrity` starts at its descriptor's level and falls to the level of what it reads -- demotion is attention-thresholded (mass ≥ θ_read), so merely *containing* dirt does not demote; *using* it does. That threshold needs a measurement: when the backend cannot measure attention, the kernel takes provenance alone and demotes the job to the worst thing it could see, at each block boundary and before each write. Writes above the job's current level raise a **privilege fault** carrying the demotion history: which segments dragged it down, via which pipes.
 
 Monotone decay would make long-lived jobs end up minimally trusted, so there are three escape hatches, in preference order: **compartmentalize** (spawn a low-integrity child to read the dirt and return results over a pipe -- the parent's watermark never moves); **endorse** (a designated guard job reads ring-3 material and re-emits at ring 2 under a narrow output schema -- the only integrity-raising operation, and the schema width is the security dial); **checkpoint-and-reset** (FORK before the dirty read, discard the tainted branch).
 

@@ -131,7 +131,7 @@ class Script:
             emit = str(raw.get("emit", "") or "")
             hint: AttentionHint | None = None
             if "attend" in raw:
-                hint = AttentionHint(tags=_as_str_tuple(raw["attend"]))
+                hint = AttentionHint(tags=_as_str_tuple(raw["attend"]), declared=True)
 
             request = MachineRequest()
             if "read" in raw:

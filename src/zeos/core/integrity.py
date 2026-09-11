@@ -111,6 +111,21 @@ def demote_for_boundary(
     return Demotion(before=current, after=Integrity(worst), because=tuple(attended))
 
 
+def demote_by_provenance(current: Integrity, *, table: SegmentTable) -> Demotion:
+    """The low-water-mark rule when attention cannot be measured: every readable
+    segment counts as attended, so the job falls to the worst thing it could see."""
+    attended: list[SegmentId] = []
+    worst = int(current)
+    for record in table.all():
+        if not record.readable or record.tokens == 0:
+            continue
+        if int(record.integrity) > worst:
+            worst = int(record.integrity)
+        if int(record.integrity) > int(current):
+            attended.append(record.id)
+    return Demotion(before=current, after=Integrity(worst), because=tuple(attended))
+
+
 def effective_integrity(current: Integrity, session_floor: Integrity | None) -> Integrity:
     """The confused-deputy rule.
 

@@ -147,6 +147,9 @@ class Job:
     #: batched here rather than per token because that is where the specs put it --
     #: mask churn, watermark demotion, and eviction all land at boundaries.
     last_block: int = -1
+    #: A step since the last block boundary decoded tokens with neither measured
+    #: attention nor a declared hint, so this block demotes on provenance, not a guess.
+    attention_guessed: bool = False
 
     @property
     def name(self) -> DescriptorName:
