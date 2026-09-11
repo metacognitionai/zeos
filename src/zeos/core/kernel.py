@@ -1328,8 +1328,24 @@ class Kernel:
                 )
                 if compartment is not None:
                     self.spawn_compartment(job, compartment)
-                else:
+                elif DescriptorName(target) in job.descriptor.children:
                     self.spawn(DescriptorName(target), parent=job.job_id)
+                else:
+                    # The name is the model's word: the journal may quote it, the
+                    # notice must not.
+                    self._raise_fault(
+                        job,
+                        Fault(
+                            kind=FaultKind.CAPABILITY,
+                            job=job.job_id,
+                            detail=(
+                                f"spawn of {target!r} refused: not among the children "
+                                f"of {job.descriptor.name}"
+                            ),
+                            segment=self._worst_attended_segment(job),
+                            notice="the descriptor you named is not one this job may spawn",
+                        ),
+                    )
             case OpKind.EXIT:
                 self._complete(job)
             case OpKind.FAULT:
