@@ -36,7 +36,7 @@ from pathlib import Path
 from zeos.core.events import Event
 from zeos.core.ids import DescriptorName, ObjectName, PipeName
 from zeos.core.kernel import Kernel, KernelConfig
-from zeos.core.pipes import PipeTable
+from zeos.core.pipes import PipeFull, PipeTable
 from zeos.core.resources import ResourceTable
 from zeos.core.vectors import VectorTable
 from zeos.descriptor.loader import CaseBundle
@@ -157,6 +157,10 @@ class Driver:
         self.trace = trace
         self.ns_per_tick = ns_per_tick
         self.on_drain = on_drain
+        #: Deliveries the kernel refused because the pipe was full, in order. Each is
+        #: also in the journal as ``PipeBackpressure``; the driver drops rather than
+        #: retries, since a schedule replays the same way every time.
+        self.refused: list[tuple[PipeName, str]] = []
         self._persisted = 0
         self._now_ns = 0
 
@@ -195,7 +199,7 @@ class Driver:
             ticks += self._run_until(event.at_ns)
             self.kernel.advance_time(max(event.at_ns, self._now_ns))
             self._now_ns = self.kernel.clock.virtual_ns
-            self.kernel.deliver(event.pipe, event.text)
+            self._deliver(event.pipe, event.text)
             self._flush()
         ticks += self._run_until(None)
         self._poll_transport()
@@ -237,4 +241,10 @@ class Driver:
         if self.transport is None:
             return
         for frame in self.transport.poll():
-            self.kernel.deliver(frame.pipe, " ".join(t.text for t in frame.tokens))
+            self._deliver(frame.pipe, " ".join(t.text for t in frame.tokens))
+
+    def _deliver(self, pipe: PipeName, text: str) -> None:
+        try:
+            self.kernel.deliver(pipe, text)
+        except PipeFull:
+            self.refused.append((pipe, text))

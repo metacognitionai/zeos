@@ -31,13 +31,17 @@ from dataclasses import dataclass, field
 from zeos.core.ids import JobId, PipeName, Principal, Ring
 from zeos.machine.base import Token
 
-__all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "DEFAULT_CAPACITY"]
+__all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "PipeFull", "DEFAULT_CAPACITY"]
 
 DEFAULT_CAPACITY = 4096
 
 
 class PipeError(RuntimeError):
     """Structural misuse of a pipe -- an unknown name, or a capacity of zero."""
+
+
+class PipeFull(PipeError):
+    """A delivery that does not fit. Nothing of it landed; the driver decides what next."""
 
 
 @dataclass(frozen=True, slots=True)

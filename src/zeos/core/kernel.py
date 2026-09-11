@@ -163,7 +163,7 @@ from zeos.core.ids import (
 from zeos.core.integrity import DEFAULT_THETA_READ, demote_for_boundary
 from zeos.core.pager import Pager, PagerResult, choose_plan
 from zeos.core.pcb import Job
-from zeos.core.pipes import Pipe, PipeTable
+from zeos.core.pipes import Pipe, PipeFull, PipeTable
 from zeos.core.principals import (
     KERNEL_PRINCIPAL,
     Elevation,
@@ -618,7 +618,13 @@ class Kernel:
         *,
         principal: Principal | None = None,
     ) -> None:
-        """A device adapter writes to a pipe. This is how the world reaches the kernel."""
+        """A device adapter writes to a pipe. This is how the world reaches the kernel.
+
+        All or nothing, as a job's write is: a delivery that does not fit lands no
+        token, is journalled as backpressure, and raises ``PipeFull`` so the driver
+        can retry, coalesce or drop knowingly. The kernel holds nothing on a device's
+        behalf, because a device, unlike a blocked job, does not stop producing.
+        """
         gate = self.gates.for_pipe(pipe_name)
         if gate is not None:
             self._guard_delivery(gate, text)
@@ -641,10 +647,27 @@ class Kernel:
         self._wake_writers(pipe)
         return tokens
 
-    def _deliver_now(self, pipe_name: PipeName, text: str) -> None:
+    def _deliver_now(self, pipe_name: PipeName, text: str, *, refuse: bool = True) -> None:
         pipe = self.pipes.ensure(pipe_name)
         tokens = tokens_from_text(text)
         latched = bool(pipe.spec.world_object)
+        fits = len(tokens) <= pipe.spec.capacity_tokens if latched else pipe.writable(len(tokens))
+        if not fits:
+            self._emit(
+                PipeBackpressure(
+                    clock=self.clock,
+                    pipe=pipe.name,
+                    job=None,
+                    capacity_tokens=pipe.spec.capacity_tokens,
+                )
+            )
+            if refuse:
+                room = pipe.spec.capacity_tokens if latched else pipe.free
+                raise PipeFull(
+                    f"{pipe_name} has room for {room} tokens; "
+                    f"a delivery of {len(tokens)} does not fit"
+                )
+            return
         accepted = pipe.latch(tokens) if latched else pipe.write(tokens)
         self._emit(
             PipeWritten(
@@ -710,7 +733,9 @@ class Kernel:
             )
         )
         if allowed:
-            self._deliver_now(gate.pipe, text)
+            # Answered inside a tick, with no driver on the stack to refuse to: a
+            # delivery that no longer fits is journalled as backpressure and dropped.
+            self._deliver_now(gate.pipe, text, refuse=False)
 
     def _pump_queued_deliveries(self, gate: GateSpec) -> None:
         queue = self._queued_deliveries.get(gate.pipe)

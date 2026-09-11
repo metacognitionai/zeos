@@ -26,6 +26,7 @@ from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal
 from zeos.machine.base import MachineBackend, MachineRequest, OpKind, TracesRaw
+from zeos.core.pipes import PipeFull
 from zeos.machine.seat import CommandSeat, CommandSource, TapeSource, seat_maps
 from zeos.trace import RawTrace
 
@@ -162,6 +163,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     def on_arrival(job: JobId, text: str) -> None:
         print(f"{name_of(job):<10} \u25c0\u2500\u2500 {text}", flush=True)
 
+    def deliver(pipe: PipeName, text: str) -> None:
+        try:
+            kernel.deliver(pipe, text)
+        except PipeFull as exc:
+            print(f"(dropped: {exc})", flush=True)
+
     def drain(seen: int) -> int:
         """Print the facts only the kernel knows, in the order the journal recorded them."""
         for event in events[seen:]:
@@ -251,16 +258,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
             while ticks < args.max_ticks:
                 while pending and pending[0].at_ns <= now_ns:
                     event = pending.pop(0)
-                    kernel.deliver(event.pipe, event.text)
+                    deliver(event.pipe, event.text)
 
                 # Between ticks: `on_command` runs mid-decode and the kernel is not re-entrant.
                 if armed and typed is not None:
                     if not pressed:
-                        kernel.deliver(interrupt_pipe, "attention")
+                        deliver(interrupt_pipe, "attention")
                         pressed = True
                     else:
                         # Sooner than a person could type, so the handler never parks on it.
-                        kernel.deliver(number_pipe, str(typed))
+                        deliver(number_pipe, str(typed))
                         typed = None
 
                 if console is not None:
@@ -274,10 +281,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             print("\n(already waiting for a number)", flush=True)
                             console.begin_number()
                         else:
-                            kernel.deliver(interrupt_pipe, "attention")
+                            deliver(interrupt_pipe, "attention")
                             console.begin_number()
                     if number is not None:
-                        kernel.deliver(number_pipe, number)
+                        deliver(number_pipe, number)
                         prompted = False
 
                     # While the handler is parked waiting for a number, the driver stops

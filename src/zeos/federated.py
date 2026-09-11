@@ -34,6 +34,7 @@ from zeos.core.clock import Clock
 from zeos.core.events import FrameDelivered, FrameDropped
 from zeos.core.ids import ObjectName, PipeName
 from zeos.core.kernel import Kernel
+from zeos.core.pipes import PipeFull
 from zeos.core.topology import Topology
 from zeos.machine.base import render
 from zeos.transport.link import LinkTransport
@@ -119,7 +120,10 @@ class Federation:
                 # Provenance survives the hop: the frame carries the ring the
                 # link was declared at, and enters the far kernel through the
                 # ordinary delivery path so it is INJECTed like any other input.
-                peer.kernel.deliver(frame.pipe, render(frame.tokens))
+                try:
+                    peer.kernel.deliver(frame.pipe, render(frame.tokens))
+                except PipeFull:
+                    continue  # journalled as backpressure on the far kernel
                 peer.kernel._emit(  # pyright: ignore[reportPrivateUsage]
                     FrameDelivered(
                         clock=peer.kernel.clock,

@@ -525,7 +525,7 @@ class PipeBackpressure(Event):
     KIND: ClassVar[str] = "pipe.backpressure"
 
     pipe: PipeName
-    job: JobId
+    job: JobId | None  # None when a device's delivery was refused
     capacity_tokens: int
 
 

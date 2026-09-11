@@ -171,7 +171,9 @@ read of the result pipe. Consequences:
 - The job remains preemptible while its tool call is in flight: preempt the
   job; the result waits in the pipe until resume.
 - Device drivers = adapters that turn external event sources (sensors, HTTP,
-  timers) into pipe writes.
+  timers) into pipe writes. A delivery is all or nothing like a job's write, but a
+  device cannot be parked: one that does not fit is refused to the driver and
+  journalled as backpressure, never truncated.
 
 ### 4.4 Interrupts are pipe writes
 
