@@ -726,6 +726,7 @@ class Kernel:
             raise KernelError("call start() before tick()")
 
         self._expire_elevations()
+        self._expire_gates()
         self._dispatch_due_vectors()
 
         contender = self.sched.should_preempt()
@@ -1786,6 +1787,28 @@ class Kernel:
         for elevation in self.principals.expired(self.clock):
             self.revoke_elevation(elevation.principal, reason="expired")
 
+    def _expire_gates(self) -> None:
+        """A guard that has not answered by its deadline is answered by the gate's
+        failure policy, as a guard that faulted would be; the guard is cancelled."""
+        for job in self.sched.jobs():
+            request = job.pending_gate
+            if request is None or self.clock.token_clock < request.deadline:
+                continue
+            gate = self.gates.for_pipe(request.pipe)
+            if gate is None:
+                continue
+            if request.gate_job is not None and self.sched.has(request.gate_job):
+                self._cancel(self.sched.get(request.gate_job), reason="gate timed out")
+            self._settle_gate(
+                job,
+                gate,
+                request,
+                allowed=gate.on_gate_failure == ALLOW,
+                reason=(
+                    f"no verdict within {gate.timeout_ticks} ticks; applying {gate.on_gate_failure}"
+                ),
+            )
+
     def apply_ownership(self, request: OwnershipRequest) -> bool:
         """Cancel or deprioritise a job, if the asker owns it.
 
@@ -2730,7 +2753,6 @@ class Kernel:
         raw: str,
     ) -> None:
         request = job.pending_gate
-        job.pending_gate = None
         if verdict is None:
             # An unrecognised answer is not consent. "Fail open" on the last check
             # before an actuator is how safety interlocks become decorative.
@@ -2739,6 +2761,19 @@ class Kernel:
         else:
             allowed = verdict.allowed
             reason = verdict.reason
+        self._settle_gate(job, gate, request, allowed=allowed, reason=reason)
+
+    def _settle_gate(
+        self,
+        job: Job,
+        gate: GateSpec,
+        request: GateRequest | None,
+        *,
+        allowed: bool,
+        reason: str,
+    ) -> None:
+        """Answer a held write: journal the verdict, then fault the job or let it retry."""
+        job.pending_gate = None
         self._emit(
             GateAnswered(
                 clock=self.clock,
