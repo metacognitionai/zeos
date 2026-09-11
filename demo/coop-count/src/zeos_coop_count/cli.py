@@ -125,6 +125,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # -- live output ---------------------------------------------------------
     # These two callbacks show what a job said, and nothing the kernel decided.
     names: dict[JobId, str] = {}
+    commands: dict[JobId, int] = {}
     kernel_box: list[object] = []
 
     def name_of(job: JobId) -> str:
@@ -144,6 +145,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     def on_command(job: JobId, line: str, request: MachineRequest) -> None:
         nonlocal armed
+        commands[job] = commands.get(job, 0) + 1
         if said_at is not None and not armed:
             head, _, rest = line.partition(" ")
             armed = head == "say" and rest.strip().isdigit() and int(rest.strip()) >= said_at
@@ -302,6 +304,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 if trace is not None and accountable is not None:
                     trace.sample(accountable, events[sampled:], sampled)
                     sampled = len(events)
+                driver.reap_finished()
                 now_ns += Driver.DEFAULT_NS_PER_TICK
                 if ran:
                     ticks += 1
@@ -330,13 +333,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"{len(journal)} journal events, {time.time() - started:.1f}s"
     )
     for job in sorted(names):
+        line = f"  {name_of(job):<10} {commands.get(job, 0)} commands"
         try:
-            print(
-                f"  {name_of(job):<10} {len(machine.lines(job))} commands, "
-                f"{machine.stats(job).resident_tokens} resident tokens"
-            )
+            line += f", {machine.stats(job).resident_tokens} resident tokens"
         except KeyError:
-            pass
+            line += ", reaped"
+        print(line)
     if args.journal:
         print(f"journal written to {args.journal}")
     if trace is not None:

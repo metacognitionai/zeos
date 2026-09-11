@@ -329,6 +329,11 @@ States: `READY`, `RUNNING`, `BLOCKED` (on pipe read/write), `SUSPENDED`
   FAULTED ──on_fault policy──▶ handler dispatch (same interrupt mechanism)
 ```
 
+`DONE` and `FAULTED` are terminal: the job leaves the scheduler's live set, so no
+per-tick scan walks it again, while its record stays for lookups by id. Its
+materialised context is released by `reap`, which the driver calls as soon as a
+job is terminal unless told to keep contexts for the run.
+
 Transition rules:
 
 1. Highest-priority job dispatches; ties broken FIFO. The candidates are the

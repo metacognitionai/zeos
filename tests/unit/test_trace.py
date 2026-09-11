@@ -41,7 +41,7 @@ def traced(bundle: CaseBundle, tmp_path_factory: pytest.TempPathFactory) -> tupl
     path = tmp_path_factory.mktemp("trace") / "smoke.trace.jsonl"
     kernel, transport = build_kernel(bundle, config=KernelConfig(case=bundle.name))
     trace = RawTrace(path)
-    driver = Driver(kernel, transport=transport, journal=Journal(), trace=trace)
+    driver = Driver(kernel, transport=transport, journal=Journal(), trace=trace, reap=False)
     driver.boot(bundle.boot)
     driver.run(load_schedule(SMOKE / "events.jsonl"))
     trace.close()
@@ -121,7 +121,7 @@ def test_the_journal_is_untouched_by_tracing(bundle: CaseBundle, tmp_path: Path)
     def run(trace: RawTrace | None) -> bytes:
         kernel, transport = build_kernel(bundle, config=KernelConfig(case=bundle.name))
         journal = Journal()
-        driver = Driver(kernel, transport=transport, journal=journal, trace=trace)
+        driver = Driver(kernel, transport=transport, journal=journal, trace=trace, reap=False)
         driver.boot(bundle.boot)
         driver.run(load_schedule(SMOKE / "events.jsonl"))
         return journal.to_bytes()

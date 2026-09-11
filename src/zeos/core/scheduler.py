@@ -40,6 +40,9 @@ class Scheduler:
 
     def __init__(self) -> None:
         self._jobs: dict[JobId, Job] = {}
+        #: The jobs that can still run. Every per-tick scan walks this and nothing
+        #: else, so a finished job costs the scheduler nothing while its record stays.
+        self._live: dict[JobId, Job] = {}
         self._running: JobId | None = None
         #: Bottom-to-top. The last element is the most recently preempted job and
         #: therefore the next to resume.
@@ -49,9 +52,15 @@ class Scheduler:
 
     def add(self, job: Job) -> None:
         self._jobs[job.job_id] = job
+        self._live[job.job_id] = job
+
+    def retire(self, job_id: JobId) -> None:
+        """A terminal job leaves the live view; its record stays for lookups."""
+        self._live.pop(job_id, None)
 
     def remove(self, job_id: JobId) -> None:
         self._jobs.pop(job_id, None)
+        self._live.pop(job_id, None)
         if self._running == job_id:
             self._running = None
         if job_id in self._stack:
@@ -64,8 +73,12 @@ class Scheduler:
         return job_id in self._jobs
 
     def jobs(self) -> tuple[Job, ...]:
-        """All jobs, in stable spawn order."""
+        """All jobs, finished ones included, in stable spawn order."""
         return tuple(sorted(self._jobs.values(), key=lambda j: j.seq))
+
+    def live(self) -> tuple[Job, ...]:
+        """The jobs that can still run, in stable spawn order."""
+        return tuple(sorted(self._live.values(), key=lambda j: j.seq))
 
     def in_state(self, state: JobState) -> tuple[Job, ...]:
         return tuple(j for j in self.jobs() if j.state is state)
@@ -94,7 +107,7 @@ class Scheduler:
         a scheduler whose tie-breaking depended on dict ordering would produce
         journals that differ between runs for no visible reason.
         """
-        candidates = [j for j in self._jobs.values() if j.state is JobState.READY]
+        candidates = [j for j in self._live.values() if j.state is JobState.READY]
         if not candidates:
             return None
         return min(candidates, key=lambda j: (j.current_priority, j.seq))

@@ -395,6 +395,8 @@ class ZeosDriver:
                 break
             self._now_ns += self.ns_per_tick
             ticks += 1
+            for job_id in self.kernel.unreaped():
+                self.kernel.reap(job_id)
             if self._apply_controls():
                 break
             if until_running and self.kernel.sched.running is not None:

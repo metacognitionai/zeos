@@ -144,6 +144,7 @@ class Driver:
         journal: Journal | None = None,
         trace: RawTrace | None = None,
         ns_per_tick: int = DEFAULT_NS_PER_TICK,
+        reap: bool = True,
         on_drain: Callable[[PipeName, tuple[Token, ...]], None] | None = None,
     ) -> None:
         if trace is not None and not isinstance(kernel.machine, TracesRaw):
@@ -157,6 +158,9 @@ class Driver:
         self.trace = trace
         self.ns_per_tick = ns_per_tick
         self.on_drain = on_drain
+        #: Give a finished job's context back as soon as it is terminal. Off for a run
+        #: that wants every transcript still materialised at the end.
+        self.reap = reap
         #: Deliveries the kernel refused because the pipe was full, in order. Each is
         #: also in the journal as ``PipeBackpressure``; the driver drops rather than
         #: retries, since a schedule replays the same way every time.
@@ -218,10 +222,19 @@ class Driver:
             self._now_ns += self.ns_per_tick
             ticks += 1
             self._drain_sinks()
+            self.reap_finished()
             self._flush()
         self._drain_sinks()
+        self.reap_finished()
         self._flush()
         return ticks
+
+    def reap_finished(self) -> None:
+        """Release every terminal job's context, unless this run keeps them. A loop
+        that unrolls ``run`` calls this after each tick."""
+        if self.reap:
+            for job_id in self.kernel.unreaped():
+                self.kernel.reap(job_id)
 
     def _drain_sinks(self) -> None:
         """Take what jobs wrote for the world out of every sink, the mirror of ``deliver``."""

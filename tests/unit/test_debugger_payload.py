@@ -77,7 +77,7 @@ def bundle() -> CaseBundle:
 @pytest.fixture(scope="module")
 def kernel(bundle: CaseBundle) -> Kernel:
     kernel, _transport = build_kernel(bundle, config=KernelConfig(case=bundle.name))
-    driver = Driver(kernel)
+    driver = Driver(kernel, reap=False)
     driver.boot(bundle.boot)
     driver.run(load_schedule(SMOKE / "events.jsonl"))
     return kernel

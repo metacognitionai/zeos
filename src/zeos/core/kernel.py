@@ -321,6 +321,7 @@ class Kernel:
         self.link = link
         self.config = config or KernelConfig()
         self.sched = Scheduler()
+        self._unreaped: list[JobId] = []
         self.clock = Clock()
         self.store = SpanStore()
         self.pager = Pager(self.store)
@@ -356,6 +357,8 @@ class Kernel:
             # Every terminal transition passes through here, so this is the one place
             # the invariant can be stated once.
             self.sched.drop_from_stack(job.job_id)
+            self.sched.retire(job.job_id)
+            self._unreaped.append(job.job_id)
             if job.vector is not None:
                 self.vectors.mark_complete(job.vector)
         self._emit(
@@ -1870,7 +1873,7 @@ class Kernel:
     def _expire_gates(self) -> None:
         """A guard that has not answered by its deadline is answered by the gate's
         failure policy, as a guard that faulted would be; the guard is cancelled."""
-        for job in self.sched.jobs():
+        for job in self.sched.live():
             request = job.pending_gate
             if request is None or self.clock.token_clock < request.deadline:
                 continue
@@ -2166,11 +2169,11 @@ class Kernel:
     def _priorities(self) -> dict[JobId, Priority]:
         """Effective priorities -- used for *wake order*, so that a holder which has
         inherited urgency is scheduled with it."""
-        return {j.job_id: j.current_priority for j in self.sched.jobs()}
+        return {j.job_id: j.current_priority for j in self.sched.live()}
 
     def _base_priorities(self) -> dict[JobId, Priority]:
         """Declared priorities -- used for *victim selection*. See ``Deadlock``."""
-        return {j.job_id: j.base_priority for j in self.sched.jobs()}
+        return {j.job_id: j.base_priority for j in self.sched.live()}
 
     def _do_acquire(self, job: Job, name: ResourceName) -> None:
         """Take a resource, or block on it (core §2.2).
@@ -2382,7 +2385,7 @@ class Kernel:
         candidates = self._counterparties(pipe, want_writer=waiting_to_read)
         if not candidates:
             return
-        for holder in self.sched.jobs():
+        for holder in self.sched.live():
             if holder.job_id == blocked.job_id or holder.state.is_terminal:
                 continue
             if holder.name not in candidates:
@@ -2409,7 +2412,7 @@ class Kernel:
         priority would quietly become as urgent as the most urgent thing that ever
         waited on it.
         """
-        for holder in self.sched.jobs():
+        for holder in self.sched.live():
             if only_for_resource is not None:
                 # Releasing one resource must not return priority donated on
                 # account of a different one the job still holds.
@@ -2837,7 +2840,7 @@ class Kernel:
         answer, so one veto cannot silently decide for the other.
         """
         verdict = parse_verdict(text)
-        for job in self.sched.jobs():
+        for job in self.sched.live():
             request = job.pending_gate
             if request is not None and request.gate_job == gate_job.job_id:
                 self._apply_verdict(job, gate, verdict, text)
@@ -3270,7 +3273,7 @@ class Kernel:
         means and what makes the region a view rather than a log: ``_retire_status_region``
         removes the copy the new one supersedes.
         """
-        for job in self.sched.jobs():
+        for job in self.sched.live():
             # A job that has not been dispatched yet has no body in its context, and a
             # region injected now would sit in front of the instructions that explain
             # it. It is seeded at ``_start_job`` instead, from the same world value.
@@ -3496,6 +3499,12 @@ class Kernel:
         if not job.state.is_terminal:
             raise KernelError(f"job {job_id} is not terminal; refusing to reap")
         self.machine.destroy_context(job_id)
+        if job_id in self._unreaped:
+            self._unreaped.remove(job_id)
+
+    def unreaped(self) -> tuple[JobId, ...]:
+        """Terminal jobs whose context is still materialised, oldest first."""
+        return tuple(self._unreaped)
 
     def _apply_completion_policy(self, job: Job) -> None:
         policy = job.descriptor.on_complete
