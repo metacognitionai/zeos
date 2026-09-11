@@ -74,6 +74,7 @@ GAS_ALARM = {
     "priority": 5,
     "pinned": True,
     "writes": ["plant.unit_a"],
+    "pipes": {"tools": "actuators.unit_a"},
 }
 THRESHOLD_ALARM_SCRIPT = [
     {"emit": "threshold alarm acknowledged"},
@@ -405,7 +406,7 @@ def test_blocking_read_deschedules_until_a_write_arrives() -> None:
 def test_backpressure_parks_the_writer_without_losing_the_payload() -> None:
     """All-or-nothing: a partial write would tear the payload and dropping the
     remainder would lose data."""
-    producer = {"name": "producer", "priority": 50}
+    producer = {"name": "producer", "priority": 50, "pipes": {"stdout": "narrow"}}
     kernel, events = build(
         descriptors=[producer],
         scripts={

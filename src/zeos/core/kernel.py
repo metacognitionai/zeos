@@ -2456,6 +2456,23 @@ class Kernel:
         *,
         then_read: PipeName | None = None,
     ) -> None:
+        if not job.capabilities.closed and pipe_name not in job.descriptor.pipes.all_names():
+            # Without capabilities the bindings are the grant; the name is the model's
+            # word, so the notice does not repeat it and no pipe is made of it.
+            self._raise_fault(
+                job,
+                Fault(
+                    kind=FaultKind.CAPABILITY,
+                    job=job.job_id,
+                    detail=(
+                        f"job binds no pipe {pipe_name!r} and holds no capabilities "
+                        f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})"
+                    ),
+                    segment=self._worst_attended_segment(job),
+                    notice="the pipe you named is not one this job may write",
+                ),
+            )
+            return
         pipe = self.pipes.ensure(pipe_name)
 
         # Effects are syscalls. This check is the enforcement floor that

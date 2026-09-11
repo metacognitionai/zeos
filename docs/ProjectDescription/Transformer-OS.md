@@ -98,7 +98,7 @@ budget:
 reads:                      # read-set: world state this job's plan depends on
   - robot.position
   - workshop.inventory
-writes:                     # write-set: world state this job may change
+writes:                     # write-set: world state this job changes; named in its resume diffs
   - robot.position
   - workshop.inventory
 pipes:
