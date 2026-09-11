@@ -22,6 +22,10 @@ maintained in the type system rather than in comments.
 | Control-token unforgeability | **Structural** -- a `CONTROL` token cannot be decoded unless the kernel enables it |
 | Eviction, stubs, page faults, store round trip | **Real mechanism** |
 | **Attention mass** | **Synthetic** -- the scripted backend cannot measure; the kernel resolves hints for paging, and demotes integrity on provenance alone unless a hint is a script's declared stipulation |
+| The seat's tokenisation | **Stand-in** -- whitespace, one word per decode; counts and boundaries only. The llama backend tokenises for real |
+| The seat's attention hint | **Synthetic** -- a guess about the job's own output; paging uses it, integrity does not (AM §11.4) |
+| Syscall ABI, parser, transcript rebuild, `MALFORMED` | **Real** -- one declaration renders the prose, the pattern and the grammar (AM §11) |
+| Sink pipes and `drain` | **Real** -- the outbound mirror of `deliver`, journalled as `pipe.drained` (core §4.5) |
 
 Nothing about eviction regret, θ-parameter sensitivity, or taint-creep rates can be
 concluded from any run of this code. The mechanisms are validated; the policies are
@@ -55,8 +59,8 @@ src/zeos/
 ├── machine/
 │   ├── base.py              THE BACKEND SWAP POINT -- five ops + serving contract
 │   ├── scripted.py          scripted streams, blocks, synthetic attention
-│   ├── abi.py               the syscall ABI a model speaks, declared once as data
-│   └── seat.py              the seat: one word per decode, parser, transcript rebuild
+│   ├── abi.py               the syscall ABI a model speaks, declared once as data   [AM §11]
+│   └── seat.py              the seat: one word per decode, parser, transcript rebuild [AM §11]
 ├── descriptor/
 │   ├── schema.py            frontmatter → Descriptor, strict parsing
 │   ├── loader.py            markdown + YAML, case directories
