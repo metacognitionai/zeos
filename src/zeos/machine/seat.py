@@ -24,6 +24,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from zeos.core.framing import shown
 from zeos.core.ids import DescriptorName, JobId, TokenKind
 from zeos.core.pipes import PipeSpec
 from zeos.descriptor.schema import Descriptor
@@ -36,7 +37,7 @@ from zeos.machine.base import (
     OpKind,
     Token,
 )
-from zeos.machine.scripted import Script, ScriptedMachine, ScriptExhausted
+from zeos.machine.scripted import PAD_TOKEN, Script, ScriptedMachine, ScriptExhausted
 
 __all__ = [
     "CommandSeat",
@@ -138,7 +139,7 @@ class Turn:
     job: JobId
     #: The descriptor this job runs, which is what decides its pipes and its prose.
     descriptor: str
-    #: The job's context as text, kernel control tokens dropped: goal, working, arrivals.
+    #: The job's context as text: goal, working, arrivals, and the kernel's frames.
     transcript: str
     #: How many commands this job has already completed, so a source that plays a tape
     #: needs no per-job state of its own.
@@ -282,7 +283,7 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
     def inject(self, job: JobId, tokens: Sequence[Token]) -> tuple[int, int]:
         start, end = super().inject(job, tokens)
         state = self._state_of(job)
-        text = " ".join(t.text for t in tokens if t.kind is TokenKind.NORMAL)
+        text = " ".join(shown(t) for t in tokens if t != PAD_TOKEN)
         if text:
             # Only reported once the job has spoken; before that this is still the prompt.
             if state.spoken:
@@ -309,15 +310,16 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         self._state.clear()
 
     def render(self, job: JobId) -> str:
-        """The transcript as a source reads it, with kernel control tokens dropped.
+        """The transcript as a source reads it: the kernel's frames as they are, ordinary
+        text that imitates one escaped so the two never look alike, and block padding
+        left out, since it is the machine's and says nothing.
 
         Rendered fresh every call rather than kept as a conversation alongside it, because
         the kernel rewrites status regions and evicts spans in place and a copy drifts.
         """
         return "".join(
-            t.text if t.text.startswith(" ") else " " + t.text
-            for t in self.transcript(job)
-            if t.kind is TokenKind.NORMAL
+            text if text.startswith(" ") else " " + text
+            for text in (shown(t) for t in self.transcript(job) if t != PAD_TOKEN)
         ).strip()
 
 

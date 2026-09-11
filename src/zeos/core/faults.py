@@ -78,6 +78,11 @@ class FaultResolution:
 def resolve(fault: Fault, policy: FaultPolicy) -> FaultResolution:
     """Map a fault plus the descriptor's declared policy onto what the kernel does."""
     notice = render_notice(fault)
+    if fault.kind is FaultKind.SPOOF:
+        # An alarm, not a policy event: the imitation is inert once frames ride on
+        # CONTROL tokens, and a policy that aborted would let any device end a job
+        # by spelling a tag.
+        return FaultResolution(FaultAction.CONTINUE, notice=notice)
     match policy.kind:
         case OnFault.ABORT:
             return FaultResolution(FaultAction.ABORT, notice=notice)
@@ -94,8 +99,8 @@ def resolve(fault: Fault, policy: FaultPolicy) -> FaultResolution:
 def render_notice(fault: Fault) -> str:
     """The ring-0 text injected into the faulting job's context.
 
-     Framed with reserved control tokens so it cannot be forged by content
-    . The framing is what carries authority; the body is prose.
+    The frame rides on CONTROL tokens once injected, so it cannot be forged by content;
+    the framing is what carries authority, the body is prose.
     """
     parts = [f"<FAULT kind={fault.kind.value}>"]
     if fault.notice is not None:
