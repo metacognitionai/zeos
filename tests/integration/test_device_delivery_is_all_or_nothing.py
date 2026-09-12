@@ -194,8 +194,9 @@ def test_a_jobs_write_that_does_not_fit_blocks_instead() -> None:
                 {"w": ["write stdout " + " ".join(f"w{i}" for i in range(40)) + ";", "exit;"]}
             )
         ),
-        [PipeSpec(IN, capacity_tokens=16)],
+        [PipeSpec(IN, capacity_tokens=40)],
     )
+    kernel.deliver(IN, "busy")
     kernel.spawn(DescriptorName("w"))
     kernel.run_until_quiescent()
     assert [b.reason for b in _of(events, JobBlocked)] == ["write-full"]

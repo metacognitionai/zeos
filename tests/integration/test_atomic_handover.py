@@ -198,7 +198,7 @@ def test_a_write_that_cannot_land_does_not_commit_the_read() -> None:
         descriptors={DescriptorName("writer"): descriptor},
         machine=machine,
         pipes=PipeTable(
-            [PipeSpec(name=out, capacity_tokens=1), PipeSpec(name=inbound, capacity_tokens=8)]
+            [PipeSpec(name=out, capacity_tokens=4), PipeSpec(name=inbound, capacity_tokens=8)]
         ),
         vectors=VectorTable(),
         world=WorldStore(),
@@ -207,6 +207,7 @@ def test_a_write_that_cannot_land_does_not_commit_the_read() -> None:
         config=KernelConfig(case="narrow-handover", max_ticks=50),
     )
     kernel.start()
+    kernel.deliver(out, "busy")
     job = kernel.spawn(DescriptorName("writer"))
     kernel.run_until_quiescent()
 

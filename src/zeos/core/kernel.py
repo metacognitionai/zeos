@@ -2619,6 +2619,25 @@ class Kernel:
             self._consult_gate(job, gate, payload, then_read)
             return
 
+        # Backpressure is a wait for room a reader can make. A payload larger than the
+        # pipe itself has no such room to wait for, so it is refused, not parked.
+        if len(payload) > pipe.spec.capacity_tokens:
+            self._raise_fault(
+                job,
+                Fault(
+                    kind=FaultKind.CAPABILITY,
+                    job=job.job_id,
+                    detail=(
+                        f"a write of {len(payload)} tokens can never fit {pipe_name!r}, "
+                        f"whose capacity is {pipe.spec.capacity_tokens}"
+                    ),
+                    segment=self._worst_attended_segment(job),
+                    pipe=pipe_name,
+                    notice="what you wrote is larger than the pipe you named can ever hold",
+                ),
+            )
+            return
+
         # An actuator has no backlog to fill (see ``Pipe.latch``), so it never applies
         # backpressure. Only a pipe carrying messages can, because only a message has
         # somebody waiting to receive it.

@@ -33,7 +33,7 @@ from zeos.world.store import WorldStore
 PIPES = [
     PipeSpec(PipeName("work.queue"), ring=Ring.TRUSTED, principal=Principal.PEER_JOB),
     PipeSpec(
-        PipeName("narrow"), ring=Ring.TRUSTED, principal=Principal.PEER_JOB, capacity_tokens=2
+        PipeName("narrow"), ring=Ring.TRUSTED, principal=Principal.PEER_JOB, capacity_tokens=5
     ),
 ]
 
@@ -154,6 +154,7 @@ def test_backpressured_writer_donates_to_the_consumer() -> None:
             "slow-drainer": [{"emit": "idling"}, {"read": "narrow"}, {"exit": True}],
         },
     )
+    kernel.deliver(PipeName("narrow"), "busy")
     kernel.spawn(DescriptorName("urgent-writer"))
     drain = kernel.spawn(DescriptorName("slow-drainer"))
     kernel.run_until_quiescent()

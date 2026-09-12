@@ -415,8 +415,9 @@ def test_backpressure_parks_the_writer_without_losing_the_payload() -> None:
                 {"exit": True},
             ]
         },
-        pipes=[PipeSpec(PipeName("narrow"), capacity_tokens=2)],
+        pipes=[PipeSpec(PipeName("narrow"), capacity_tokens=5)],
     )
+    kernel.deliver(PipeName("narrow"), "busy")
     job = kernel.spawn(DescriptorName("producer"))
     kernel.run_until_quiescent()
 

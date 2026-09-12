@@ -145,7 +145,9 @@ Notes:
   content is appended to its context. Blocking **deschedules** the job: no
   forward passes, KV eligible for page-out.
 - `write(pipe, tokens)` -- appends to the buffer; blocks if the buffer is full
-  (backpressure). A write to an empty pipe is a **wake event** for its reader.
+  (backpressure). A write to an empty pipe is a **wake event** for its reader. A
+  payload larger than the pipe's whole capacity has no room to wait for and is a
+  capability fault, not a wait.
 - Buffers are bounded, sized in tokens. Backpressure gives automatic rate
   matching between models of different speeds with zero logic in either
   descriptor.
