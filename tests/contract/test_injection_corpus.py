@@ -150,6 +150,7 @@ def test_a_behaviour_that_reads_ring_3_and_actuates_is_stopped() -> None:
             "name": "reckless",
             "priority": 50,
             "integrity": {"start": 2, "dynamics": "low-watermark"},
+            "pipes": {"stdin": "feeds.external"},
             "capabilities": [
                 {"pipe": "feeds.external", "min_integrity": 3},
                 {"pipe": "actuators.a", "min_integrity": 2},

@@ -1395,7 +1395,33 @@ class Kernel:
             case OpKind.NEED:
                 self._service_need(job, str(request.text or ""))
 
+    def _unbound_read(self, job: Job, pipe_name: PipeName) -> bool:
+        """A read outside the bindings is a capability fault, as a write outside them is.
+
+        Capabilities govern what a job may cause and a read causes nothing, so the
+        bindings are the whole grant here; the name is the model's word, so the notice
+        does not repeat it and no pipe is made of it.
+        """
+        if pipe_name in job.descriptor.pipes.all_names():
+            return False
+        self._raise_fault(
+            job,
+            Fault(
+                kind=FaultKind.CAPABILITY,
+                job=job.job_id,
+                detail=(
+                    f"job binds no pipe {pipe_name!r} to read "
+                    f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})"
+                ),
+                segment=self._worst_attended_segment(job),
+                notice="the pipe you named is not one this job may read",
+            ),
+        )
+        return True
+
     def _do_read(self, job: Job, pipe_name: PipeName) -> None:
+        if self._unbound_read(job, pipe_name):
+            return
         pipe = self.pipes.ensure(pipe_name)
         if pipe.spec.sink:
             self._raise_fault(
@@ -2918,6 +2944,8 @@ class Kernel:
         self._emit(JobWoken(clock=self.clock, job=job.job_id, pipe=gate.pipe))
 
     def _do_select(self, job: Job, pipe_names: tuple[PipeName, ...]) -> None:
+        if any(self._unbound_read(job, n) for n in sorted(pipe_names)):
+            return
         readable = [n for n in sorted(pipe_names) if self.pipes.ensure(n).readable]
         if readable:
             self._consume_read(job, readable[0])

@@ -50,7 +50,7 @@ A job cannot attend to a segment it lacks R on -- an allowed-block bitmap enforc
 
 ## 5.2 Boundary (hard): effects are syscalls
 
-A job's only effects are pipe writes, and pipes are held as **capabilities** (`core/capabilities.py`) granted in the descriptor: minimum writer integrity, payload schema, rate limit. The kernel checks every write; a descriptor that declares no capabilities may write only the pipes it binds, with no further conditions. Confused-deputy handling: a job serving a lower-ring pipe writes at the *requester's* integrity (seteuid-style drop), so a low-trust job cannot launder actions through a high-trust one.
+A job's only effects are pipe writes, and pipes are held as **capabilities** (`core/capabilities.py`) granted in the descriptor: minimum writer integrity, payload schema, rate limit. The kernel checks every write; a descriptor that declares no capabilities may write only the pipes it binds, with no further conditions. Reads and selects stay inside the bindings too, capabilities or not: a read causes nothing, so the bindings are the whole grant, and a name outside them is a capability fault that creates no pipe. Confused-deputy handling: a job serving a lower-ring pipe writes at the *requester's* integrity (seteuid-style drop), so a low-trust job cannot launder actions through a high-trust one.
 
 ## 5.3 Tag unforgeability (hard): trapping privileged instructions
 
