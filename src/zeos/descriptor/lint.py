@@ -899,13 +899,14 @@ def _check_write_conflicts(
             if left.priority != right.priority:
                 continue
             if left.writes.intersects(right.writes):
+                shared = ", ".join(sorted(left.writes.patterns & right.writes.patterns))
                 findings.append(
                     Finding(
                         rule="concurrent-write",
                         severity=Severity.WARNING,
                         detail=(
                             f"{left_name!r} and {right_name!r} both write "
-                            f"[{right.writes.render()}] at priority {left.priority}; "
+                            f"[{shared or right.writes.render()}] at priority {left.priority}; "
                             "at equal priority the interleaving is unspecified"
                         ),
                     )
