@@ -26,6 +26,7 @@ maintained in the type system rather than in comments.
 | The seat's attention hint | **Synthetic** -- a guess about the job's own output; paging uses it, integrity does not (AM §11.4) |
 | Syscall ABI, parser, transcript rebuild, `MALFORMED` | **Real** -- one declaration renders the prose, the pattern and the grammar (AM §11) |
 | Sink pipes and `drain` | **Real** -- the outbound mirror of `deliver`, journalled as `pipe.drained` (core §4.5) |
+| Provenance of content | **Real** -- each write in a pipe carries its writer's integrity; readers, vector payloads and world objects receive the worse of that and the pipe's ring (MP §4) |
 
 Nothing about eviction regret, θ-parameter sensitivity, or taint-creep rates can be
 concluded from any run of this code. The mechanisms are validated; the policies are
