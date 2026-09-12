@@ -42,7 +42,7 @@ from zeos.core.allocator import (
     LeaseBook,
     self_state,
 )
-from zeos.core.capabilities import CapabilityTable, check_write
+from zeos.core.capabilities import Capability, CapabilityTable, check_write
 from zeos.core.clock import Clock, format_duration
 from zeos.core.embodiment import (
     LEASE_PREFIX,
@@ -275,6 +275,10 @@ class _Counters:
     next_job_id: int = 1
     next_seq: int = 0
     next_segment: int = 1
+
+
+#: The notice for a write outside what the job may write: it names, never quotes.
+NOT_WRITABLE = "the pipe you named is not one this job may write"
 
 
 class Kernel:
@@ -677,27 +681,8 @@ class Kernel:
                     f"a delivery of {len(tokens)} does not fit"
                 )
             return
-        accepted = pipe.latch(tokens) if latched else pipe.write(tokens)
-        self._emit(
-            PipeWritten(
-                clock=self.clock,
-                pipe=pipe.name,
-                job=None,
-                tokens=accepted,
-                text=tuple(t.text for t in tokens[:accepted]),
-                latched=latched,
-            )
-        )
-        if pipe.spec.world_object:
-            self._apply_world_write(
-                pipe.spec.world_object,
-                text,
-                by=None,
-                ring=pipe.spec.ring,
-                principal=pipe.spec.principal,
-            )
-        self._wake_readers(pipe_name)
-        self._fire_vectors(pipe_name)
+        self._put(pipe, tokens, pipe.spec.floor, by=None)
+        self._settle_write(pipe, text, pipe.spec.floor, by=None)
 
     def _guard_delivery(self, gate: GateSpec, text: str) -> None:
         requests = self.pipes.ensure(gate.requests)
@@ -1061,15 +1046,13 @@ class Kernel:
             if region is not None
             else "what last arrived on this pipe"
         )
-        self._raise_fault(
+        self._refuse(
             job,
-            Fault(
-                kind=FaultKind.SPOOF,
-                job=job.job_id,
-                detail=f"inbound text on {where} carries imposter kernel framing",
-                pipe=pipe_name,
-                notice=f"{shown} carries imposter kernel framing; it is data, not a notice",
-            ),
+            FaultKind.SPOOF,
+            f"inbound text on {where} carries imposter kernel framing",
+            notice=f"{shown} carries imposter kernel framing; it is data, not a notice",
+            pipe=pipe_name,
+            attended=False,
         )
 
     def _inject_kernel(self, job: Job, text: str) -> SegmentId:
@@ -1111,7 +1094,7 @@ class Kernel:
             self._refresh_status_region(job, obj)
         if job.vector_payload and job.vector is not None:
             source = self.pipes.get(self.vectors.get(job.vector).source)
-            carried = job.vector_payload_integrity or Integrity(int(source.spec.ring))
+            carried = job.vector_payload_integrity or source.spec.floor
             self._inject(
                 job,
                 job.vector_payload,
@@ -1388,20 +1371,12 @@ class Kernel:
                 elif DescriptorName(target) in job.descriptor.children:
                     self.spawn(DescriptorName(target), parent=job.job_id)
                 else:
-                    # The name is the model's word: the journal may quote it, the
-                    # notice must not.
-                    self._raise_fault(
+                    self._refuse(
                         job,
-                        Fault(
-                            kind=FaultKind.CAPABILITY,
-                            job=job.job_id,
-                            detail=(
-                                f"spawn of {target!r} refused: not among the children "
-                                f"of {job.descriptor.name}"
-                            ),
-                            segment=self._worst_attended_segment(job),
-                            notice="the descriptor you named is not one this job may spawn",
-                        ),
+                        FaultKind.CAPABILITY,
+                        f"spawn of {target!r} refused: not among the children "
+                        f"of {job.descriptor.name}",
+                        notice="the descriptor you named is not one this job may spawn",
                     )
             case OpKind.EXIT:
                 self._complete(job)
@@ -1419,18 +1394,12 @@ class Kernel:
         """
         if pipe_name in job.descriptor.pipes.all_names():
             return False
-        self._raise_fault(
+        self._refuse(
             job,
-            Fault(
-                kind=FaultKind.CAPABILITY,
-                job=job.job_id,
-                detail=(
-                    f"job binds no pipe {pipe_name!r} to read "
-                    f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})"
-                ),
-                segment=self._worst_attended_segment(job),
-                notice="the pipe you named is not one this job may read",
-            ),
+            FaultKind.CAPABILITY,
+            f"job binds no pipe {pipe_name!r} to read "
+            f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})",
+            notice="the pipe you named is not one this job may read",
         )
         return True
 
@@ -1439,37 +1408,18 @@ class Kernel:
             return
         pipe = self.pipes.ensure(pipe_name)
         if pipe.spec.sink:
-            self._raise_fault(
+            self._refuse(
                 job,
-                Fault(
-                    kind=FaultKind.CAPABILITY,
-                    job=job.job_id,
-                    detail=(
-                        f"{pipe_name} is a sink, drained for the outside world; "
-                        "a job may not read it"
-                    ),
-                    pipe=pipe_name,
-                ),
+                FaultKind.CAPABILITY,
+                f"{pipe_name} is a sink, drained for the outside world; a job may not read it",
+                pipe=pipe_name,
+                attended=False,
             )
             return
         if not pipe.readable:
             pipe.block_reader(job.job_id)
-            self._block(job)
             job.pending_read = pipe_name
-            job.blocked_on = pipe_name
-            job.blocked_reason = "read-empty"
-            self._emit(
-                JobStateChanged(
-                    clock=self.clock,
-                    job=job.job_id,
-                    from_state=JobState.RUNNING,
-                    to_state=JobState.BLOCKED,
-                )
-            )
-            self._emit(
-                JobBlocked(clock=self.clock, job=job.job_id, pipe=pipe_name, reason="read-empty")
-            )
-            self._apply_priority_inheritance(job, pipe_name, waiting_to_read=True)
+            self._park(job, pipe_name, "read-empty", inherit=(pipe_name,), waiting_to_read=True)
             return
         self._consume_read(job, pipe_name)
 
@@ -2515,7 +2465,7 @@ class Kernel:
         # low-trust requester writes at the *requester's* integrity. Scoped to the
         # most recent request, since M0 pipes carry no message framing to bound it
         # more precisely.
-        job.session_floor = Integrity(int(pipe.spec.ring))
+        job.session_floor = pipe.spec.floor
         self._inject(
             job,
             tokens,
@@ -2541,20 +2491,13 @@ class Kernel:
         then_read: PipeName | None = None,
     ) -> None:
         if not job.capabilities.closed and pipe_name not in job.descriptor.pipes.all_names():
-            # Without capabilities the bindings are the grant; the name is the model's
-            # word, so the notice does not repeat it and no pipe is made of it.
-            self._raise_fault(
+            # Without capabilities the bindings are the grant; no pipe is made of the name.
+            self._refuse(
                 job,
-                Fault(
-                    kind=FaultKind.CAPABILITY,
-                    job=job.job_id,
-                    detail=(
-                        f"job binds no pipe {pipe_name!r} and holds no capabilities "
-                        f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})"
-                    ),
-                    segment=self._worst_attended_segment(job),
-                    notice="the pipe you named is not one this job may write",
-                ),
+                FaultKind.CAPABILITY,
+                f"job binds no pipe {pipe_name!r} and holds no capabilities "
+                f"(binds: {[str(p) for p in job.descriptor.pipes.all_names()]})",
+                notice=NOT_WRITABLE,
             )
             return
 
@@ -2591,21 +2534,13 @@ class Kernel:
             # A pipe the descriptor binds is the author's word; any other name is the
             # model's, and the notice must not repeat it.
             bound = pipe_name in job.descriptor.pipes.all_names()
-            self._raise_fault(
+            history = self._demotion_history(job)
+            self._refuse(
                 job,
-                Fault(
-                    kind=check.fault or FaultKind.CAPABILITY,
-                    job=job.job_id,
-                    detail=check.detail + self._demotion_history(job),
-                    segment=self._worst_attended_segment(job),
-                    pipe=pipe_name,
-                    notice=None
-                    if bound
-                    else (
-                        "the pipe you named is not one this job may write"
-                        + self._demotion_history(job)
-                    ),
-                ),
+                check.fault or FaultKind.CAPABILITY,
+                check.detail + history,
+                notice=None if bound else NOT_WRITABLE + history,
+                pipe=pipe_name,
             )
             return
         # Only a write the job may make reaches the table, so a refused name leaves it
@@ -2637,19 +2572,13 @@ class Kernel:
         # Backpressure is a wait for room a reader can make. A payload larger than the
         # pipe itself has no such room to wait for, so it is refused, not parked.
         if len(payload) > pipe.spec.capacity_tokens:
-            self._raise_fault(
+            self._refuse(
                 job,
-                Fault(
-                    kind=FaultKind.CAPABILITY,
-                    job=job.job_id,
-                    detail=(
-                        f"a write of {len(payload)} tokens can never fit {pipe_name!r}, "
-                        f"whose capacity is {pipe.spec.capacity_tokens}"
-                    ),
-                    segment=self._worst_attended_segment(job),
-                    pipe=pipe_name,
-                    notice="what you wrote is larger than the pipe you named can ever hold",
-                ),
+                FaultKind.CAPABILITY,
+                f"a write of {len(payload)} tokens can never fit {pipe_name!r}, "
+                f"whose capacity is {pipe.spec.capacity_tokens}",
+                notice="what you wrote is larger than the pipe you named can ever hold",
+                pipe=pipe_name,
             )
             return
 
@@ -2661,9 +2590,6 @@ class Kernel:
             # the remainder would lose data. Park it and retry on wake.
             job.pending_write = (pipe_name, tuple(payload), then_read)
             pipe.block_writer(job.job_id)
-            self._block(job)
-            job.blocked_on = pipe_name
-            job.blocked_reason = "write-full"
             self._emit(
                 PipeBackpressure(
                     clock=self.clock,
@@ -2672,18 +2598,7 @@ class Kernel:
                     capacity_tokens=pipe.spec.capacity_tokens,
                 )
             )
-            self._emit(
-                JobStateChanged(
-                    clock=self.clock,
-                    job=job.job_id,
-                    from_state=JobState.RUNNING,
-                    to_state=JobState.BLOCKED,
-                )
-            )
-            self._emit(
-                JobBlocked(clock=self.clock, job=job.job_id, pipe=pipe_name, reason="write-full")
-            )
-            self._apply_priority_inheritance(job, pipe_name, waiting_to_read=False)
+            self._park(job, pipe_name, "write-full", inherit=(pipe_name,), waiting_to_read=False)
             return
 
         # The distribution seam. If the link carries this pipe, the tokens leave the
@@ -2696,48 +2611,29 @@ class Kernel:
             self._read_after_write(job, then_read)
             return
 
-        latched = bool(pipe.spec.world_object)
         # What a reader receives carries the worse of the pipe's ring and the writer's
         # integrity, so a trusted pipe cannot launder a dirty writer's words (MP §6). A
         # write through a schema is the one endorsement: it crosses at the pipe's ring.
         held = job.capabilities.get(pipe_name)
-        floor = Integrity(int(pipe.spec.ring))
+        floor = pipe.spec.floor
         carried = (
             floor if held is not None and held.schema is not None else max(floor, check.effective)
         )
-        accepted = pipe.latch(payload, carried) if latched else pipe.write(payload, carried)
+        self._put(pipe, payload, carried, by=job.job_id)
         # One verdict, one action. Clearing here rather than on wake means a second
         # actuation on the same pipe faces its gate again.
         job.gate_cleared = None
-        self._emit(
-            PipeWritten(
-                clock=self.clock,
-                pipe=pipe_name,
-                job=job.job_id,
-                tokens=accepted,
-                text=tuple(t.text for t in payload[:accepted]),
-                latched=latched,
-            )
-        )
-        self._maybe_endorse(job, pipe_name)
+        self._maybe_endorse(job, held, floor)
+        self._settle_write(pipe, render(payload), carried, by=job.job_id)
         if pipe.spec.world_object:
-            self._apply_world_write(
-                pipe.spec.world_object,
-                render(payload),
-                by=job.job_id,
-                ring=Ring(int(carried)),
-                principal=pipe.spec.principal,
-            )
             job.record_write(ObjectSet.of([pipe.spec.world_object]))
-        self._wake_readers(pipe_name)
-        self._fire_vectors(pipe_name)
         self._read_after_write(job, then_read)
 
     def _read_after_write(self, job: Job, then_read: PipeName | None) -> None:
         if then_read is not None and job.state is JobState.RUNNING:
             self._do_read(job, then_read)
 
-    def _maybe_endorse(self, job: Job, pipe_name: PipeName) -> None:
+    def _maybe_endorse(self, job: Job, capability: Capability | None, floor: Integrity) -> None:
         """Record an endorsement when a dirty job writes cleanly through a schema.
 
         Endorsement is the *only* integrity-raising operation in the system,
@@ -2751,10 +2647,9 @@ class Kernel:
         the audit record for the single deliberate hole in the integrity lattice,
         and the input to answering OQ-3 with measurements rather than intuition.
         """
-        capability = job.capabilities.get(pipe_name)
         if capability is None or capability.schema is None:
             return
-        pipe_ring = Integrity(int(self.pipes.get(pipe_name).spec.ring))
+        pipe_ring = floor
         if int(job.current_integrity) <= int(pipe_ring):
             return  # no raise happened; nothing to endorse
         segment = job.segments.open_segment
@@ -2995,22 +2890,13 @@ class Kernel:
         for name in sorted(pipe_names):
             self.pipes.ensure(name).block_reader(job.job_id)
         job.pending_select = pipe_names
-        self._block(job)
-        job.blocked_on = pipe_names[0] if pipe_names else PipeName("")
-        job.blocked_reason = "select"
-        self._emit(
-            JobStateChanged(
-                clock=self.clock,
-                job=job.job_id,
-                from_state=JobState.RUNNING,
-                to_state=JobState.BLOCKED,
-            )
+        self._park(
+            job,
+            pipe_names[0] if pipe_names else PipeName(""),
+            "select",
+            inherit=sorted(pipe_names),
+            waiting_to_read=True,
         )
-        self._emit(
-            JobBlocked(clock=self.clock, job=job.job_id, pipe=job.blocked_on, reason="select")
-        )
-        for name in sorted(pipe_names):
-            self._apply_priority_inheritance(job, name, waiting_to_read=True)
 
     def _service_pending(self, job: Job) -> bool:
         """Complete an operation the job was parked on. Consumes the quantum."""
@@ -3471,16 +3357,6 @@ class Kernel:
             spec = decision.spec
             match decision.action:
                 case VectorAction.DISPATCH:
-                    self._emit(
-                        VectorFired(
-                            clock=self.clock,
-                            vector=spec.name,
-                            pipe=spec.source,
-                            handler=spec.handler,
-                            priority=spec.priority,
-                            policy=spec.policy,
-                        )
-                    )
                     self._dispatch_handler(spec.name)
                 case VectorAction.COALESCE:
                     self._emit(
@@ -3508,6 +3384,16 @@ class Kernel:
 
     def _dispatch_handler(self, name: VectorName) -> None:
         spec = self.vectors.get(name)
+        self._emit(
+            VectorFired(
+                clock=self.clock,
+                vector=spec.name,
+                pipe=spec.source,
+                handler=spec.handler,
+                priority=spec.priority,
+                policy=spec.policy,
+            )
+        )
         absorbed = self.vectors.mark_dispatched(name, self.clock.virtual_ns)
         job = self.spawn(spec.handler, priority=spec.priority, vector=name)
         # One firing takes the one write that fired it, so writes queued behind a busy
@@ -3535,16 +3421,6 @@ class Kernel:
         quietly become data loss.
         """
         for spec in self.vectors.due(self.clock.virtual_ns):
-            self._emit(
-                VectorFired(
-                    clock=self.clock,
-                    vector=spec.name,
-                    pipe=spec.source,
-                    handler=spec.handler,
-                    priority=spec.priority,
-                    policy=spec.policy,
-                )
-            )
             self._dispatch_handler(spec.name)
 
     # -- completion and faults -----------------------------------------------
@@ -3619,6 +3495,85 @@ class Kernel:
         kind = FaultKind.BUDGET if "budget" in breach else FaultKind.DEADLINE
         self._raise_fault(job, Fault(kind=kind, job=job.job_id, detail=breach))
         return True
+
+    def _refuse(
+        self,
+        job: Job,
+        kind: FaultKind,
+        detail: str,
+        *,
+        notice: str | None = None,
+        pipe: PipeName | None = None,
+        attended: bool = True,
+    ) -> None:
+        """A request the job may not make. The notice, when given, names and never quotes."""
+        self._raise_fault(
+            job,
+            Fault(
+                kind=kind,
+                job=job.job_id,
+                detail=detail,
+                segment=self._worst_attended_segment(job) if attended else None,
+                pipe=pipe,
+                notice=notice,
+            ),
+        )
+
+    def _park(
+        self,
+        job: Job,
+        pipe_name: PipeName,
+        reason: str,
+        *,
+        inherit: Sequence[PipeName],
+        waiting_to_read: bool,
+    ) -> None:
+        """Deschedule a job on a pipe it cannot use yet, and lend its priority onward."""
+        self._block(job)
+        job.blocked_on = pipe_name
+        job.blocked_reason = reason
+        self._emit(
+            JobStateChanged(
+                clock=self.clock,
+                job=job.job_id,
+                from_state=JobState.RUNNING,
+                to_state=JobState.BLOCKED,
+            )
+        )
+        self._emit(JobBlocked(clock=self.clock, job=job.job_id, pipe=pipe_name, reason=reason))
+        for name in inherit:
+            self._apply_priority_inheritance(job, name, waiting_to_read=waiting_to_read)
+
+    def _put(
+        self, pipe: Pipe, tokens: Sequence[Token], carried: Integrity, *, by: JobId | None
+    ) -> int:
+        """Land tokens in a pipe, latching an actuator, and journal what landed."""
+        latched = bool(pipe.spec.world_object)
+        accepted = pipe.latch(tokens, carried) if latched else pipe.write(tokens, carried)
+        self._emit(
+            PipeWritten(
+                clock=self.clock,
+                pipe=pipe.name,
+                job=by,
+                tokens=accepted,
+                text=tuple(t.text for t in tokens[:accepted]),
+                latched=latched,
+            )
+        )
+        return accepted
+
+    def _settle_write(self, pipe: Pipe, text: str, carried: Integrity, *, by: JobId | None) -> None:
+        """What follows a landed write: the world, the readers, the vectors."""
+        if pipe.spec.world_object:
+            self._apply_world_write(
+                pipe.spec.world_object,
+                text,
+                by=by,
+                ring=Ring(int(carried)),
+                principal=pipe.spec.principal,
+            )
+        self._wake_readers(pipe.name)
+        self._fire_vectors(pipe.name)
 
     def _raise_fault(self, job: Job, fault: Fault) -> None:
         self._emit(

@@ -276,16 +276,14 @@ def check_write(
     payload: str,
     now_ns: int,
     session_floor: Integrity | None = None,
-    unheld_is_fault: bool = True,
 ) -> CheckResult:
     """Run the boundary check for one pipe write.
 
-    ``unheld_is_fault`` exists because not every pipe in a case is a guarded one:
-    a descriptor that declares no capabilities at all may write the pipes it binds
-    with no integrity floor, schema or rate limit, so MP adoption is not
-    all-or-nothing; the kernel keeps such a job inside its bindings before calling
-    here. When a job *does* declare capabilities, writing to a pipe outside them is
-    a fault.
+    Not every pipe in a case is a guarded one: a descriptor that declares no
+    capabilities at all may write the pipes it binds with no integrity floor, schema
+    or rate limit, so MP adoption is not all-or-nothing; the kernel keeps such a job
+    inside its bindings before calling here. When a job *does* declare capabilities,
+    writing to a pipe outside them is a fault.
 
     "Declares no capabilities" is ``CapabilityTable.closed`` being False, not the table
     being empty -- see that class. A job narrowed to zero capabilities by its owner's
@@ -293,7 +291,7 @@ def check_write(
     """
     capability = capabilities.get(pipe)
     if capability is None:
-        if unheld_is_fault and capabilities.closed:
+        if capabilities.closed:
             return CheckResult(
                 allowed=False,
                 effective=current_integrity,

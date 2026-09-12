@@ -68,6 +68,11 @@ class PipeSpec:
     #: other outbound kind, a history rather than a value, and ``deliver``'s mirror.
     sink: bool = False
 
+    @property
+    def floor(self) -> Integrity:
+        """The pipe's ring as an integrity: the cleanest anything read from it can be."""
+        return Integrity(int(self.ring))
+
     def __post_init__(self) -> None:
         if self.name == KERNEL_PIPE:
             raise PipeError(f"pipe {self.name!r} is reserved for the kernel's own notices")
@@ -145,7 +150,7 @@ class Pipe:
             self.buffer.append(token)
         self.total_written += accepted
         if accepted:
-            floor = Integrity(int(self.spec.ring))
+            floor = self.spec.floor
             self.writes.append(Write(accepted, max(floor, integrity or floor)))
         return accepted
 
@@ -163,11 +168,11 @@ class Pipe:
     def take_write(self) -> tuple[tuple[Token, ...], Integrity]:
         """Take the oldest write, whole, and nothing of the writes behind it."""
         if not self.writes:
-            return (), Integrity(int(self.spec.ring))
+            return (), self.spec.floor
         return self.take(self.writes[0].tokens)
 
     def _consume(self, count: int) -> Integrity:
-        worst = Integrity(int(self.spec.ring))
+        worst = self.spec.floor
         while count > 0 and self.writes:
             head = self.writes[0]
             worst = max(worst, head.integrity)

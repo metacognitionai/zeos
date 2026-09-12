@@ -221,13 +221,15 @@ class Driver:
                 break
             self._now_ns += self.ns_per_tick
             ticks += 1
-            self._drain_sinks()
-            self.reap_finished()
-            self._flush()
+            self._settle()
+        self._settle()
+        return ticks
+
+    def _settle(self) -> None:
+        """What follows a tick: sinks drained, finished jobs reaped, the journal flushed."""
         self._drain_sinks()
         self.reap_finished()
         self._flush()
-        return ticks
 
     def reap_finished(self) -> None:
         """Release every terminal job's context, unless this run keeps them. A loop

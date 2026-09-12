@@ -20,7 +20,7 @@ decoding. Neither knows the words of the ABI: those come from a ``SyscallABI``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -198,6 +198,12 @@ class _State:
     spoken: bool = False
 
 
+def _shown(tokens: Iterable[Token]) -> Iterator[str]:
+    """Tokens as a text-only source sees them: frames as they are, imitations escaped,
+    the machine's block padding left out."""
+    return (shown(t) for t in tokens if t != PAD_TOKEN)
+
+
 class CommandSeat(ScriptedMachine, SyscallSeat):
     """A machine backend that spends one decode per word of one command.
 
@@ -283,7 +289,7 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
     def inject(self, job: JobId, tokens: Sequence[Token]) -> tuple[int, int]:
         start, end = super().inject(job, tokens)
         state = self._state_of(job)
-        text = " ".join(shown(t) for t in tokens if t != PAD_TOKEN)
+        text = " ".join(_shown(tokens))
         if text:
             # Only reported once the job has spoken; before that this is still the prompt.
             if state.spoken:
@@ -318,8 +324,7 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         the kernel rewrites status regions and evicts spans in place and a copy drifts.
         """
         return "".join(
-            text if text.startswith(" ") else " " + text
-            for text in (shown(t) for t in self.transcript(job) if t != PAD_TOKEN)
+            text if text.startswith(" ") else " " + text for text in _shown(self.transcript(job))
         ).strip()
 
 

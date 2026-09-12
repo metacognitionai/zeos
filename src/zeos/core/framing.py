@@ -43,9 +43,10 @@ def frame_tokens(text: str) -> tuple[Token, ...]:
     the kernel never promotes an imitation into a frame of its own.
     """
     words = text.split()
-    if not words or not opens_frame(words[0]):
+    opener = _OPENER.match(words[0]) if words else None
+    if opener is None:
         return tuple(Token(w, TokenKind.NORMAL) for w in words)
-    name = _OPENER.match(words[0]).group(0).lstrip("</")  # type: ignore[union-attr]
+    name = opener.group(0).lstrip("</")
     end = next((i for i, w in enumerate(words) if w.endswith(">")), len(words) - 1)
     kinds = [TokenKind.NORMAL] * len(words)
     for i in range(end + 1):
