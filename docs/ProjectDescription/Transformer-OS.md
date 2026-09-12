@@ -193,7 +193,7 @@ happens on the way out:
 
 | kind | declared by | written by | read by | what a write is |
 | --- | --- | --- | --- | --- |
-| ordinary | nothing extra | a job or a device | a job | a message: appended, read once, gone |
+| ordinary | nothing extra | a job or a device | a job | a message: appended, read once, gone; received at the worse of the pipe's ring and the writer's integrity |
 | actuator | `world_object:` | a job or a device | nobody need read it | a value: latches, replacing what was there, and becomes world state |
 | sink | `sink: true` | a job | the driver | a history: appended, drained for the outside world |
 

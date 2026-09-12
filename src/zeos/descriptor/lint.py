@@ -145,6 +145,7 @@ def lint(
         findings.extend(_check_fault_handler(d, descriptors))
         findings.extend(_check_completion(d, descriptors))
         findings.extend(_check_confused_deputy(d, rings, descriptors))
+        findings.extend(_check_write_up(d, rings))
         findings.extend(_check_endorser_width(d, opts))
         findings.extend(_check_context(d))
         findings.extend(_check_unimplemented_keys(d))
@@ -371,6 +372,29 @@ def _check_confused_deputy(
             descriptor=d.name,
         )
     ]
+
+
+def _check_write_up(d: Descriptor, rings: Mapping[PipeName, Ring]) -> list[Finding]:
+    """A capability whose floor is dirtier than the ring of the pipe it writes, with no
+    schema: the kernel lets such a write land and carries the writer's integrity to the
+    reader (MP §6), so the pipe's ring promises less than it reads. Worth knowing."""
+    findings: list[Finding] = []
+    for c in d.capabilities:
+        ring = rings.get(c.pipe, Ring.TRUSTED)
+        if c.schema is None and int(c.min_integrity) > int(ring):
+            findings.append(
+                Finding(
+                    rule="write-up-without-schema",
+                    severity=Severity.WARNING,
+                    detail=(
+                        f"capability on {str(c.pipe)!r} admits a writer at integrity "
+                        f"{int(c.min_integrity)} to a ring-{int(ring)} pipe with no schema; "
+                        "readers receive such writes at the writer's integrity, not the pipe's"
+                    ),
+                    descriptor=d.name,
+                )
+            )
+    return findings
 
 
 def _check_endorser_width(d: Descriptor, opts: LintOptions) -> list[Finding]:

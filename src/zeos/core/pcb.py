@@ -124,6 +124,8 @@ class Job:
     #: Source-pipe payload taken when this job's vector fired, injected at `_start_job`
     #: so it lands after the body rather than ahead of it.
     vector_payload: tuple[Token, ...] = ()
+    #: How clean the write that fired the vector was; the payload is injected at that.
+    vector_payload_integrity: Integrity | None = None
 
     # -- Protected Mode ------------------------------------------------------
 

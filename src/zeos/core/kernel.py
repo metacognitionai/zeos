@@ -1111,13 +1111,14 @@ class Kernel:
             self._refresh_status_region(job, obj)
         if job.vector_payload and job.vector is not None:
             source = self.pipes.get(self.vectors.get(job.vector).source)
+            carried = job.vector_payload_integrity or Integrity(int(source.spec.ring))
             self._inject(
                 job,
                 job.vector_payload,
                 pipe=source.spec.name,
                 principal=source.spec.principal,
-                ring=source.spec.ring,
-                integrity=Integrity(int(source.spec.ring)),
+                ring=Ring(int(carried)),
+                integrity=carried,
             )
             self._alarm_spoof(job, job.vector_payload, source.spec.name)
             job.vector_payload = ()
@@ -2499,7 +2500,7 @@ class Kernel:
 
     def _consume_read(self, job: Job, pipe_name: PipeName) -> None:
         pipe = self.pipes.get(pipe_name)
-        tokens = pipe.read()
+        tokens, carried = pipe.take()
         self._emit(
             PipeReadEvent(
                 clock=self.clock,
@@ -2520,8 +2521,8 @@ class Kernel:
             tokens,
             pipe=pipe_name,
             principal=pipe.spec.principal,
-            ring=pipe.spec.ring,
-            integrity=Integrity(int(pipe.spec.ring)),
+            ring=Ring(int(carried)),
+            integrity=carried,
         )
         self._alarm_spoof(job, tokens, pipe_name)
         if pipe.spec.world_object:
@@ -2696,7 +2697,15 @@ class Kernel:
             return
 
         latched = bool(pipe.spec.world_object)
-        accepted = pipe.latch(payload) if latched else pipe.write(payload)
+        # What a reader receives carries the worse of the pipe's ring and the writer's
+        # integrity, so a trusted pipe cannot launder a dirty writer's words (MP §6). A
+        # write through a schema is the one endorsement: it crosses at the pipe's ring.
+        held = job.capabilities.get(pipe_name)
+        floor = Integrity(int(pipe.spec.ring))
+        carried = (
+            floor if held is not None and held.schema is not None else max(floor, check.effective)
+        )
+        accepted = pipe.latch(payload, carried) if latched else pipe.write(payload, carried)
         # One verdict, one action. Clearing here rather than on wake means a second
         # actuation on the same pipe faces its gate again.
         job.gate_cleared = None
@@ -2716,7 +2725,7 @@ class Kernel:
                 pipe.spec.world_object,
                 render(payload),
                 by=job.job_id,
-                ring=pipe.spec.ring,
+                ring=Ring(int(carried)),
                 principal=pipe.spec.principal,
             )
             job.record_write(ObjectSet.of([pipe.spec.world_object]))
@@ -3504,8 +3513,9 @@ class Kernel:
         # One firing takes the one write that fired it, so writes queued behind a busy
         # handler each reach the handler they are due; journalled as a read, since until
         # it was, a fold replaying the journal left the payload in the buffer.
-        payload = self.pipes.get(spec.source).read_write()
+        payload, carried = self.pipes.get(spec.source).take_write()
         job.vector_payload = payload
+        job.vector_payload_integrity = carried
         self._emit(
             PipeReadEvent(
                 clock=self.clock,
