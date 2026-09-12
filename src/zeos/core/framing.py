@@ -33,20 +33,26 @@ def opens_frame(word: str) -> bool:
 
 
 def frame_tokens(text: str) -> tuple[Token, ...]:
-    """Tokenise kernel text: frame tags as ``CONTROL``, the words inside as ``NORMAL``.
+    """Tokenise one kernel frame: its outer tags as ``CONTROL``, everything inside as
+    ``NORMAL``.
 
-    A tag runs from its opener to the first word ending in ``>``, so ``<STATUS obj>``
-    and ``<FAULT kind=x>`` are whole tags and the value between them keeps its kind.
+    The opening tag runs from the first word to the first word ending in ``>``, so
+    ``<STATUS obj>`` and ``<FAULT kind=x>`` are whole tags; the closing tag is the last
+    word when it closes the same frame. Only those two are the kernel's. A word inside the
+    body that spells a tag, a device value or a quoted request say, stays ``NORMAL``, so
+    the kernel never promotes an imitation into a frame of its own.
     """
-    out: list[Token] = []
-    in_tag = False
-    for word in text.split():
-        if not in_tag and opens_frame(word):
-            in_tag = True
-        out.append(Token(word, TokenKind.CONTROL if in_tag else TokenKind.NORMAL))
-        if in_tag and word.endswith(">"):
-            in_tag = False
-    return tuple(out)
+    words = text.split()
+    if not words or not opens_frame(words[0]):
+        return tuple(Token(w, TokenKind.NORMAL) for w in words)
+    name = _OPENER.match(words[0]).group(0).lstrip("</")  # type: ignore[union-attr]
+    end = next((i for i, w in enumerate(words) if w.endswith(">")), len(words) - 1)
+    kinds = [TokenKind.NORMAL] * len(words)
+    for i in range(end + 1):
+        kinds[i] = TokenKind.CONTROL
+    if len(words) - 1 > end and words[-1] == f"</{name}>":
+        kinds[-1] = TokenKind.CONTROL
+    return tuple(Token(w, k) for w, k in zip(words, kinds, strict=True))
 
 
 def imitates_frame(tokens: Iterable[Token]) -> bool:

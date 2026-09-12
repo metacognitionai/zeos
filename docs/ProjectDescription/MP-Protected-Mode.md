@@ -54,7 +54,7 @@ A job's only effects are pipe writes, and pipes are held as **capabilities** (`c
 
 ## 5.3 Tag unforgeability (hard): trapping privileged instructions
 
-Kernel framing is carried on reserved tokens the model cannot emit -- in this codebase a `CONTROL` token kind the machine refuses to decode unless the kernel enabled it; on a real tokenizer, reserved token IDs disabled for inbound text. Text that *renders* like `<KERNEL>` arrives as ordinary tokens carrying no authority. Attempted mimicry is a **spoof fault**: already inert, but worth alarming on -- the job is told and continues, whatever its `on_fault` policy, since a policy that aborted would let any device end a job by spelling a tag. A source that reads its context as text is shown the kernel's frames as they are and an imitation escaped.
+Kernel framing is carried on reserved tokens the model cannot emit -- in this codebase a `CONTROL` token kind the machine refuses to decode unless the kernel enabled it; on a real tokenizer, reserved token IDs disabled for inbound text. Text that *renders* like `<KERNEL>` arrives as ordinary tokens carrying no authority. Attempted mimicry is a **spoof fault** wherever it enters a window, on a pipe read, in a vector payload or in the value a status region shows: already inert, but worth alarming on -- the job is told and continues, whatever its `on_fault` policy, since a policy that aborted would let any device end a job by spelling a tag. A source that reads its context as text is shown the kernel's frames as they are and an imitation escaped.
 
 ## 5.4 Model-level (soft, trainable, measurable): the execute bit
 
