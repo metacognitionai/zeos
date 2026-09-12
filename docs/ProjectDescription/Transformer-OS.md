@@ -265,7 +265,10 @@ Equivalent of `cli`/`sti` -- and just as dangerous, hence the cap.
   or starved beyond a deadline, raise a scheduler fault (visible event, not
   silent aging -- real-time systems should fail loudly).
 - **Re-entrancy**: default `coalesce` or `queue`; `reentrant` only for
-  handlers whose read/write sets are disjoint across instances.
+  handlers whose read/write sets are disjoint across instances. Under `queue`
+  each firing's handler is handed the one write that fired it: a pipe remembers
+  where each write ended, so N writes behind a busy handler are N handlers with
+  N payloads, in order.
 
 ## 6. Suspension, the stack, and resumption
 

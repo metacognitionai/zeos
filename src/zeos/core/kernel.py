@@ -3501,10 +3501,10 @@ class Kernel:
         spec = self.vectors.get(name)
         absorbed = self.vectors.mark_dispatched(name, self.clock.virtual_ns)
         job = self.spawn(spec.handler, priority=spec.priority, vector=name)
-        # Draining the source is a read like any other, and until this was journalled
-        # it was the one pipe mutation the record did not carry: a fold replaying the
-        # journal left the payload sitting in the buffer for the rest of the run.
-        payload = self.pipes.get(spec.source).read()
+        # One firing takes the one write that fired it, so writes queued behind a busy
+        # handler each reach the handler they are due; journalled as a read, since until
+        # it was, a fold replaying the journal left the payload in the buffer.
+        payload = self.pipes.get(spec.source).read_write()
         job.vector_payload = payload
         self._emit(
             PipeReadEvent(

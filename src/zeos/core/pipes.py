@@ -88,6 +88,9 @@ class Pipe:
     waiting_writers: deque[JobId] = field(default_factory=deque[JobId])
     #: Total tokens ever written. Feeds vector coalescing and telemetry.
     total_written: int = 0
+    #: The length of each write still in the buffer, oldest first, so a vector firing
+    #: can take exactly the write that fired it while a job's read still takes all.
+    writes: deque[int] = field(default_factory=deque[int])
 
     @property
     def name(self) -> PipeName:
@@ -121,6 +124,7 @@ class Pipe:
         against its own buffer and is never woken.
         """
         self.buffer.clear()
+        self.writes.clear()
         return self.write(tokens)
 
     def write(self, tokens: Sequence[Token]) -> int:
@@ -130,12 +134,27 @@ class Pipe:
         for token in tokens[:accepted]:
             self.buffer.append(token)
         self.total_written += accepted
+        if accepted:
+            self.writes.append(accepted)
         return accepted
 
     def read(self, n: int | None = None) -> tuple[Token, ...]:
         """Take up to ``n`` tokens (all available if ``None``)."""
         count = self.available if n is None else min(n, self.available)
+        self._consume(count)
         return tuple(self.buffer.popleft() for _ in range(count))
+
+    def read_write(self) -> tuple[Token, ...]:
+        """Take the oldest write, whole, and nothing of the writes behind it."""
+        return self.read(self.writes[0]) if self.writes else ()
+
+    def _consume(self, count: int) -> None:
+        while count > 0 and self.writes:
+            if self.writes[0] <= count:
+                count -= self.writes.popleft()
+            else:
+                self.writes[0] -= count
+                count = 0
 
     def peek(self) -> tuple[Token, ...]:
         return tuple(self.buffer)
