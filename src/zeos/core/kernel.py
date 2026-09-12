@@ -2516,7 +2516,6 @@ class Kernel:
                 ),
             )
             return
-        pipe = self.pipes.ensure(pipe_name)
 
         # A write is a boundary too: what the job could see must count before it acts,
         # not only at the next block.
@@ -2568,6 +2567,9 @@ class Kernel:
                 ),
             )
             return
+        # Only a write the job may make reaches the table, so a refused name leaves it
+        # exactly as it was.
+        pipe = self.pipes.ensure(pipe_name)
 
         # A verdict is not an ordinary write. Recognised here, after the capability
         # check, so that a job forging a verdict for a pipe it does not hold the
