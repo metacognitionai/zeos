@@ -98,12 +98,12 @@ budget:
 reads:                      # read-set: world state this job's plan depends on
   - robot.position
   - workshop.inventory
-writes:                     # write-set: world state this job may change
+writes:                     # write-set: world state this job changes; named in its resume diffs
   - robot.position
   - workshop.inventory
 pipes:
   stdin:  user.commands     # blocking read source
-  stdout: user.reports      # output sink
+  stdout: user.reports      # replies: a sink pipe, drained for the user (§4.5)
   tools:  robot.actuators   # tool calls are writes here; results read back
 children:                   # sub-jobs this job may spawn (the hierarchy)
   - clear-bench
@@ -145,7 +145,9 @@ Notes:
   content is appended to its context. Blocking **deschedules** the job: no
   forward passes, KV eligible for page-out.
 - `write(pipe, tokens)` -- appends to the buffer; blocks if the buffer is full
-  (backpressure). A write to an empty pipe is a **wake event** for its reader.
+  (backpressure). A write to an empty pipe is a **wake event** for its reader. A
+  payload larger than the pipe's whole capacity has no room to wait for and is a
+  capability fault, not a wait.
 - Buffers are bounded, sized in tokens. Backpressure gives automatic rate
   matching between models of different speeds with zero logic in either
   descriptor.
@@ -171,7 +173,9 @@ read of the result pipe. Consequences:
 - The job remains preemptible while its tool call is in flight: preempt the
   job; the result waits in the pipe until resume.
 - Device drivers = adapters that turn external event sources (sensors, HTTP,
-  timers) into pipe writes.
+  timers) into pipe writes. A delivery is all or nothing like a job's write, but a
+  device cannot be parked: one that does not fit is refused to the driver and
+  journalled as backpressure, never truncated.
 
 ### 4.4 Interrupts are pipe writes
 
@@ -180,6 +184,31 @@ bound to it at high priority. A write to that pipe makes the handler runnable.
 One wake mechanism serves dataflow, tool completion, and interrupts -- the
 interrupt vector table is just the table of (pipe → handler, priority)
 bindings.
+
+### 4.5 Three kinds of pipe
+
+Every pipe is a bounded token buffer with the semantics of §4.1. Its
+declaration says which of three things it is for, and the difference is what
+happens on the way out:
+
+| kind | declared by | written by | read by | what a write is |
+| --- | --- | --- | --- | --- |
+| ordinary | nothing extra | a job or a device | a job | a message: appended, read once, gone; received at the worse of the pipe's ring and the writer's integrity |
+| actuator | `world_object:` | a job or a device | nobody need read it | a value: latches, replacing what was there, and becomes world state at the writer's integrity |
+| sink | `sink: true` | a job | the driver | a history: appended, drained for the outside world |
+
+An **actuator** is the outbound half of §4.3: a write to it changes the
+named world object, which is how one job's effect shows up in another job's
+resume diff (§6.2) and in a status region. A **sink** is the other outbound
+kind: what a job writes there is for the world, not for another job, so the
+driver takes it out with `drain`, the mirror of `deliver`. The write was
+checked and journalled when it landed, so what leaves is only what the kernel
+let in; the drain is journalled as `pipe.drained` and wakes a writer parked on
+the full sink. A job that tries to read a sink raises a capability fault: a
+sink has no reader inside the system, by declaration.
+
+A device delivery is the inbound direction on an ordinary or actuator pipe,
+and is refused whole when it does not fit (§4.3).
 
 ## 5. Interrupts and preemption
 
@@ -236,7 +265,10 @@ Equivalent of `cli`/`sti` -- and just as dangerous, hence the cap.
   or starved beyond a deadline, raise a scheduler fault (visible event, not
   silent aging -- real-time systems should fail loudly).
 - **Re-entrancy**: default `coalesce` or `queue`; `reentrant` only for
-  handlers whose read/write sets are disjoint across instances.
+  handlers whose read/write sets are disjoint across instances. Under `queue`
+  each firing's handler is handed the one write that fired it: a pipe remembers
+  where each write ended, so N writes behind a busy handler are N handlers with
+  N payloads, in order.
 
 ## 6. Suspension, the stack, and resumption
 
@@ -326,6 +358,11 @@ States: `READY`, `RUNNING`, `BLOCKED` (on pipe read/write), `SUSPENDED`
   PINNED-IDLE ──write on its declared stdin──▶ READY
   FAULTED ──on_fault policy──▶ handler dispatch (same interrupt mechanism)
 ```
+
+`DONE` and `FAULTED` are terminal: the job leaves the scheduler's live set, so no
+per-tick scan walks it again, while its record stays for lookups by id. Its
+materialised context is released by `reap`, which the driver calls as soon as a
+job is terminal unless told to keep contexts for the run.
 
 Transition rules:
 

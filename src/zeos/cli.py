@@ -41,6 +41,9 @@ from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, read_journal
+from zeos.machine.base import render
+from zeos.machine.seat import CommandSeat, TapeSource
+from zeos.trace import RawTrace, read_trace
 
 __all__ = ["main"]
 
@@ -50,6 +53,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     findings = lint(
         bundle.descriptors,
         pipes=bundle.pipes,
+        scripts=bundle.scripts,
         vectors=bundle.vectors,
         resources=bundle.resources,
         platforms=bundle.platforms,
@@ -74,6 +78,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     findings = lint(
         bundle.descriptors,
         pipes=bundle.pipes,
+        scripts=bundle.scripts,
         vectors=bundle.vectors,
         resources=bundle.resources,
         platforms=bundle.platforms,
@@ -88,22 +93,41 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     events: list[Event] = []
+    machine = (
+        CommandSeat(source=TapeSource(bundle.scripts), block_size=args.block_size)
+        if args.machine == "seat"
+        else None
+    )
     kernel, transport = build_kernel(
         bundle,
+        machine=machine,
         journal_sink=events,
         config=KernelConfig(seed=args.seed, case=bundle.name),
         block_size=args.block_size,
     )
     journal = Journal(Path(args.journal) if args.journal else None)
-    driver = Driver(kernel, transport=transport, journal=journal)
+    trace = RawTrace(Path(args.trace)) if args.trace else None
+    driver = Driver(
+        kernel,
+        transport=transport,
+        journal=journal,
+        trace=trace,
+        on_drain=None
+        if args.quiet
+        else lambda pipe, tokens: print(f"{pipe} \u25c0\u2500\u2500 {render(tokens)}"),
+    )
     driver.boot(bundle.boot)
     schedule = load_schedule(Path(args.events)) if args.events else ()
     ticks = driver.run(schedule)
     journal.close()
+    if trace is not None:
+        trace.close()
 
     print(f"{bundle.name}: {ticks} ticks, {len(journal)} journal events")
     if args.journal:
         print(f"journal written to {args.journal}")
+    if trace is not None:
+        print(f"machine trace written to {args.trace} ({len(trace)} rows)")
     return 0
 
 
@@ -177,6 +201,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         findings = lint(
             bundle.descriptors,
             pipes=bundle.pipes,
+            scripts=bundle.scripts,
             vectors=bundle.vectors,
             resources=bundle.resources,
             platforms=bundle.platforms,
@@ -184,7 +209,10 @@ def _cmd_debug(args: argparse.Namespace) -> int:
             gates=bundle.gates,
         )
         records = read_journal(Path(args.journal)) if args.journal else None
-        return build_payload(bundle, records=records, findings=findings, every=args.every)
+        trace = read_trace(Path(args.trace)) if args.trace else None
+        return build_payload(
+            bundle, records=records, findings=findings, every=args.every, trace=trace
+        )
 
     if args.out:
         out = export(payload(), Path(args.out))
@@ -283,9 +311,24 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("case")
     p_run.add_argument("--events", default=None, help="JSONL schedule of external events")
     p_run.add_argument("--journal", default=None, help="where to write the journal")
+    p_run.add_argument(
+        "--trace",
+        default=None,
+        help="where to write the machine's own account of each window, beside the journal",
+    )
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--block-size", type=int, default=16)
+    p_run.add_argument(
+        "--machine",
+        choices=("scripted", "seat"),
+        default="scripted",
+        help="what answers each decode: the case's scripts step by step, or the same "
+        "scripts spoken as syscall commands through the seat, one word per decode",
+    )
     p_run.add_argument("--force", action="store_true", help="run despite lint errors")
+    p_run.add_argument(
+        "--quiet", action="store_true", help="do not print what leaves the sink pipes"
+    )
     p_run.set_defaults(func=_cmd_run)
 
     p_replay = sub.add_parser("replay", help="re-read a journal and check it reproduces")
@@ -300,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     p_debug = sub.add_parser("debug", help="draw a case, and step through a journal of it")
     p_debug.add_argument("case", help="path to a case directory")
     p_debug.add_argument("--journal", default=None, help="a journal to step through")
+    p_debug.add_argument(
+        "--trace", default=None, help="the machine trace written beside that journal"
+    )
     p_debug.add_argument("-o", "--out", default=None, help="write one self-contained page")
     p_debug.add_argument("--port", type=int, default=8000)
     p_debug.add_argument(

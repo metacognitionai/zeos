@@ -49,6 +49,9 @@ __all__ = [
     "DecodeResult",
     "SpliceResult",
     "ContextStats",
+    "RawWord",
+    "RawWindow",
+    "TracesRaw",
     "MachineBackend",
     "ControlTokenViolation",
     "MaskViolation",
@@ -113,6 +116,7 @@ class OpKind(enum.StrEnum):
     WRITE_READ = "write_read"  # hand over and sleep, with no boundary between
     FAULT = "fault"  # reference to a stub handle
     NEED = "need"  # structured request for content believed to exist
+    MALFORMED = "malformed"  # a closed command the machine could not shape; text has the words
     ACQUIRE = "acquire"  # take a resource; blocks if full
     RELEASE = "release"  # give it back
     SPAWN = "spawn"  # start a child job
@@ -145,10 +149,14 @@ class AttentionHint:
 
     This type exists to make the fiction visible in the type system. A real backend
     returns ``DecodeResult.attention`` and leaves this ``None``; only M0 populates
-    it. Anywhere this appears, policy conclusions are unavailable.
+    it. Anywhere this appears, policy conclusions are unavailable -- except that a
+    ``declared`` hint is a script's stipulation of what the model attended, and the
+    integrity rule takes it at its word. A backend's own guess is never declared, and
+    the kernel then demotes on provenance alone: everything the job could see.
     """
 
     tags: tuple[str, ...] = ()
+    declared: bool = False
     #: Fraction of total mass given to the tagged segments; the remainder is spread
     #: by recency. 1.0 means "this step attended the tagged content and nothing else".
     tag_weight: float = 0.8
@@ -200,6 +208,41 @@ class ContextStats:
     resident_tokens: int
     blocks: int
     open_segment_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class RawWord:
+    """One kernel word as the machine holds it: the model tokens it became, and any
+    control text folded in ahead of it that the kernel never sees or counts."""
+
+    pieces: tuple[str, ...]
+    framing: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RawWindow:
+    """A job's window in the machine's own units, one entry per kernel word.
+
+    ``trailing`` is framing after the last word. ``kv_resident`` is how many model
+    tokens, framing and pieces together, have a forward pass behind them; the rest are
+    prefilled on the next decode.
+    """
+
+    words: tuple[RawWord, ...]
+    kv_resident: int
+    trailing: tuple[str, ...] = ()
+
+    @property
+    def model_tokens(self) -> int:
+        return sum(len(w.pieces) + len(w.framing) for w in self.words) + len(self.trailing)
+
+
+@runtime_checkable
+class TracesRaw(Protocol):
+    """A machine that can account for a window beneath the kernel's words. Optional and
+    outside ``MachineBackend``: nothing below word offsets is a kernel fact."""
+
+    def raw(self, job: JobId) -> RawWindow: ...
 
 
 @runtime_checkable

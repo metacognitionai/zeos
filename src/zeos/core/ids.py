@@ -85,7 +85,9 @@ Integrity = NewType("Integrity", int)
 
 RING_COUNT: Final = 4
 
-#: The one pipe whose writes are ring 0 by construction.
+#: The one pipe whose writes are ring 0 by construction. Reserved: no pipe may be
+#: declared with this name and no descriptor may bind it, so kernel text is the only
+#: text ever journalled under it.
 KERNEL_PIPE: Final = PipeName("kernel")
 
 
@@ -206,6 +208,7 @@ class FaultKind(enum.StrEnum):
     DEADLINE = "deadline_fault"
     STARVATION = "scheduler_fault_starvation"
     TOOL_ERROR = "tool_error"
+    MALFORMED = "malformed_request"  # not a request at all; kept apart from CAPABILITY as GATE is
     DEADLOCK = "scheduler_fault_deadlock"
     # ZEOS-NLI
     #: An action gate refused an actuation on semantic grounds. Distinct

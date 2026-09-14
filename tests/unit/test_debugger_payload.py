@@ -17,19 +17,54 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from zeos.core import serde
-from zeos.core.events import Decoded, Injected, PipeReadEvent, PipeWritten
-from zeos.core.kernel import KernelConfig
-from zeos.debugger.payload import apply_delta, build_payload, frames, structure
+from zeos.core.clock import Clock
+from zeos.core.events import (
+    Decoded,
+    Event,
+    Forked,
+    Injected,
+    PermsChanged,
+    PipeReadEvent,
+    PipeWritten,
+    SegmentClosed,
+    SegmentEvicted,
+    Spliced,
+)
+from zeos.core.ids import (
+    DescriptorName,
+    Integrity,
+    JobId,
+    Perm,
+    PipeName,
+    Principal,
+    Ring,
+    SegmentId,
+)
+from zeos.core.kernel import Kernel, KernelConfig
+from zeos.core.pipes import PipeTable
+from zeos.core.vectors import VectorTable
+from zeos.debugger.payload import (
+    CONTEXT_OPS,
+    apply_delta,
+    build_payload,
+    frames,
+    replay_context,
+    structure,
+)
 from zeos.descriptor.lint import lint
 from zeos.descriptor.loader import CaseBundle, load_case
 from zeos.descriptor.schema import Descriptor
 from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal, JournalRecord
+from zeos.machine.scripted import PAD_TOKEN, Script, ScriptedMachine
 from zeos.monitor.state import MARKED_KINDS, fold
+from zeos.trace import RawTrace, replay_trace
+from zeos.world.store import WorldStore
 
 SMOKE = Path(__file__).resolve().parents[1] / "fixtures" / "smoke"
 
@@ -40,11 +75,16 @@ def bundle() -> CaseBundle:
 
 
 @pytest.fixture(scope="module")
-def records(bundle: CaseBundle) -> Sequence[JournalRecord]:
+def kernel(bundle: CaseBundle) -> Kernel:
     kernel, _transport = build_kernel(bundle, config=KernelConfig(case=bundle.name))
-    driver = Driver(kernel)
+    driver = Driver(kernel, reap=False)
     driver.boot(bundle.boot)
     driver.run(load_schedule(SMOKE / "events.jsonl"))
+    return kernel
+
+
+@pytest.fixture(scope="module")
+def records(kernel: Kernel) -> Sequence[JournalRecord]:
     journal = Journal()
     journal.extend(kernel.events)
     return journal.records
@@ -334,3 +374,260 @@ def test_tick_starts_open_each_virtual_instant(records: Sequence[JournalRecord])
     assert starts == sorted(set(starts))
     opened = [views[i].tick for i in starts]
     assert opened == list(range(views[-1].tick + 1))
+
+
+# --- the context log ----------------------------------------------------------
+
+
+def _held(window: dict[str, Any]) -> list[str]:
+    """A window flattened to the token texts the machine would hold, pads included."""
+    out: list[str] = []
+    for region in window["regions"]:
+        out.extend(region["text"] if region["text"] else [PAD_TOKEN.text] * region["count"])
+    return out
+
+
+def test_the_replayed_window_is_the_machines_transcript(
+    kernel: Kernel, records: Sequence[JournalRecord]
+) -> None:
+    """The load-bearing test: replaying the log reproduces, token for token, what the
+    machine held at the end of the run. The page performs the same steps, so this is
+    the proof it borrows."""
+    windows = replay_context(frames(records)["contexts"])
+    assert windows, "a run with jobs must leave windows to compare"
+    for job, window in windows.items():
+        transcript = [t.text for t in kernel.machine.transcript(JobId(job))]
+        assert _held(window) == transcript, f"job {job}'s window differs from its transcript"
+        assert window["tokens"] == len(transcript)
+
+
+def test_injected_segments_sit_where_the_kernel_closed_them(
+    records: Sequence[JournalRecord],
+) -> None:
+    """Every ``segment.closed`` names an offset range; the replayed region must occupy
+    exactly that range at that frame, which checks the pads and output segments
+    before it as much as the segment itself."""
+    built = frames(records)
+    checked = 0
+    for index, record in enumerate(records):
+        if not isinstance(record.event, SegmentClosed):
+            continue
+        window = replay_context(built["contexts"], upto=index)[int(record.event.job)]
+        offset = 0
+        for region in window["regions"]:
+            if region["segment"] == int(record.event.segment):
+                break
+            offset += region["count"]
+        else:
+            pytest.fail(f"segment {record.event.segment} is not in the replayed window")
+        assert (offset, offset + region["count"]) == (record.event.start, record.event.end)
+        checked += 1
+    assert checked, "the fixture closes no segments; this test has lost its subject"
+
+
+def test_an_injected_region_carries_its_provenance_and_perms(
+    records: Sequence[JournalRecord],
+) -> None:
+    """Ring, integrity and the pipe it arrived on are what make a window readable as
+    a protection story rather than a wall of text, and the perms arrive one event
+    later than the text, so both halves have to land on the same region."""
+    windows = replay_context(frames(records)["contexts"])
+    injected = [r for w in windows.values() for r in w["regions"] if r["kind"] == "inject"]
+    assert injected
+    for region in injected:
+        assert region["pipe"] and region["ring"] is not None and region["integrity"] is not None
+        assert region["perms"] is not None
+    bodies = [r for r in injected if r["ring"] == int(Ring.DESCRIPTOR)]
+    assert bodies and all(r["perms"] & Perm.P.value for r in bodies), "a body is pinned"
+
+
+def test_the_context_log_is_sorted_and_lands_inside_the_timeline(
+    records: Sequence[JournalRecord],
+) -> None:
+    built = frames(records)
+    marks = [row[0] for row in built["contexts"]]
+    assert marks == sorted(marks)
+    assert all(0 <= m < built["count"] for m in marks)
+    assert {row[1] for row in built["contexts"]} <= set(CONTEXT_OPS)
+
+
+def test_decimation_keeps_every_context_operation(records: Sequence[JournalRecord]) -> None:
+    whole = frames(records)["contexts"]
+    coarse = frames(records, every=8)
+    assert [row[1:] for row in coarse["contexts"]] == [row[1:] for row in whole]
+    assert all(0 <= row[0] < coarse["count"] for row in coarse["contexts"])
+
+
+def test_an_empty_journal_still_offers_a_context_log() -> None:
+    assert frames([])["contexts"] == []
+    assert replay_context([]) == {}
+
+
+# Proportioned like test_stage_d_virtual_context: spans must dwarf the stub framing.
+_PATROL = {
+    "name": "patrol",
+    "priority": 80,
+    "context": {
+        "window": 300,
+        "eviction": "attention-clock",
+        "stub_budget": 120,
+        "min_span_age": 0,
+        "high_watermark": 0.6,
+        "low_watermark": 0.4,
+    },
+}
+_SWEEP = (
+    "sweep {i} of the lower drive completed with all readings nominal and no "
+    "exceptions logged against the transfer units or the auxiliary pumps on "
+    "this pass through the section"
+)
+
+
+def _evicting_run() -> tuple[Kernel, list[Event]]:
+    events: list[Event] = []
+    steps = [{"emit": _SWEEP.format(i=i)} for i in range(24)] + [{"exit": True}]
+    kernel = Kernel(
+        descriptors={DescriptorName("patrol"): Descriptor.from_frontmatter(_PATROL)},
+        machine=ScriptedMachine({"patrol": Script.from_spec(steps)}, block_size=4),
+        pipes=PipeTable([]),
+        vectors=VectorTable(),
+        world=WorldStore(),
+        journal_sink=events,
+        config=KernelConfig(case="evicting"),
+    )
+    kernel.start()
+    kernel.spawn(DescriptorName("patrol"))
+    kernel.run_until_quiescent()
+    return kernel, events
+
+
+def test_an_evicted_segment_becomes_a_stub_of_the_journalled_size() -> None:
+    """The journal carries a stub's size but never its text -- ``render_stub`` runs in
+    the kernel and is not journalled -- so a stub region is a placeholder that says
+    which segment it stands for, how many tokens it costs, and where the content
+    went. The window's total must still match the machine's."""
+    kernel, events = _evicting_run()
+    journal = Journal()
+    journal.extend(events)
+    evictions = [e for e in events if isinstance(e, SegmentEvicted)]
+    assert evictions, "the run evicted nothing; the fixture is mis-proportioned"
+
+    windows = replay_context(frames(journal.records)["contexts"])
+    (window,) = windows.values()
+    (job,) = windows
+    assert window["tokens"] == kernel.machine.stats(JobId(job)).resident_tokens
+    stubs = {r["segment"]: r for r in window["regions"] if r["kind"] == "stub"}
+    live = {r["segment"] for r in window["regions"]}
+    evicted = {int(e.segment) for e in evictions}
+    assert not live & evicted, "an evicted segment must leave the window"
+    # A stub is itself a segment and can be evicted in its turn.
+    standing = [e for e in evictions if int(e.stub) not in evicted]
+    assert standing
+    for eviction in standing:
+        stub = stubs[int(eviction.stub)]
+        assert stub["count"] == eviction.stub_tokens
+        assert stub["stub_of"] == int(eviction.segment)
+        assert stub["store"] == eviction.store
+        assert stub["text"] == []
+
+
+def _records(*events: Event) -> list[JournalRecord]:
+    return [JournalRecord(seq=i, event=e) for i, e in enumerate(events)]
+
+
+def _inject(job: int, segment: int, *text: str) -> Injected:
+    return Injected(
+        clock=Clock(),
+        job=JobId(job),
+        segment=SegmentId(segment),
+        pipe=PipeName("kernel"),
+        principal=Principal.KERNEL,
+        ring=Ring.KERNEL,
+        integrity=Integrity(0),
+        tokens=len(text),
+        text=text,
+    )
+
+
+def test_a_removal_splice_takes_the_region_out() -> None:
+    """A status-region retraction is a splice with nothing in: ``start == end`` and
+    ``tokens_in == 0``, and the window must simply lose the region."""
+    records = _records(
+        _inject(1, 1, "a", "b"),
+        _inject(1, 2, "<STATUS", "x>", "0", "</STATUS>"),
+        Decoded(clock=Clock(), job=JobId(1), segment=SegmentId(3), tokens=1, text=("say",)),
+        Spliced(
+            clock=Clock(),
+            job=JobId(1),
+            start_segment=SegmentId(2),
+            end_segment=SegmentId(2),
+            tokens_in=0,
+            tokens_out=4,
+            invalidated_downstream_tokens=1,
+        ),
+    )
+    before = replay_context(frames(records)["contexts"], upto=2)[1]
+    after = replay_context(frames(records)["contexts"])[1]
+    assert [r["segment"] for r in before["regions"]] == [1, 2, 3]
+    assert [r["segment"] for r in after["regions"]] == [1, 3]
+    assert (before["tokens"], after["tokens"]) == (7, 3)
+
+
+def test_a_fork_copies_the_parents_window_before_the_childs_perms_apply() -> None:
+    """The kernel revokes R on a compartment child's copied segments before it
+    journals the fork, so the log has to put the fork first or the perms would name
+    segments the child does not yet hold."""
+    records = _records(
+        _inject(1, 1, "secret"),
+        _inject(1, 2, "granted"),
+        PermsChanged(
+            clock=Clock(),
+            job=JobId(2),
+            segment=SegmentId(1),
+            from_perms=Perm.R,
+            to_perms=Perm.NONE,
+        ),
+        Forked(clock=Clock(), parent=JobId(1), child=JobId(2), shared_segments=2),
+    )
+    log = frames(records)["contexts"]
+    assert [row[1] for row in log] == ["inject", "inject", "fork", "perms"]
+    windows = replay_context(log)
+    assert [r["text"] for r in windows[2]["regions"]] == [["secret"], ["granted"]]
+    assert windows[2]["regions"][0]["perms"] == Perm.NONE.value
+    assert windows[1]["regions"][0]["perms"] is None, "the parent's own copy is untouched"
+
+
+# --- the machine trace ---------------------------------------------------------
+
+
+def test_the_trace_is_absent_unless_one_was_written(records: Sequence[JournalRecord]) -> None:
+    """``None`` and ``[]`` mean different things to the page: no machine view to
+    offer, and a machine that had nothing to say."""
+    assert frames(records)["trace"] is None
+    assert frames(records, trace=[])["trace"] == []
+    assert frames([], trace=[])["trace"] == []
+
+
+def _sampled(kernel: Kernel) -> RawTrace:
+    trace = RawTrace()
+    trace.sample(kernel.machine, kernel.events, 0)  # pyright: ignore[reportArgumentType]
+    return trace
+
+
+def test_the_trace_is_re_keyed_to_frames_and_otherwise_carried_whole(
+    kernel: Kernel, records: Sequence[JournalRecord]
+) -> None:
+    """Replaying the re-keyed rows gives the same account as replaying the file."""
+    rows = _sampled(kernel).rows
+    built = frames(records, trace=rows)["trace"]
+    assert [row[0] for row in built] == sorted(row[0] for row in built)
+    assert all(0 <= row[0] < frames(records)["count"] for row in built)
+    keys = ("seq", "job", "kv_resident", "from_word", "words", "trailing")
+    assert replay_trace([dict(zip(keys, row, strict=True)) for row in built]) == replay_trace(rows)
+
+
+def test_decimation_keeps_every_trace_row(kernel: Kernel, records: Sequence[JournalRecord]) -> None:
+    rows = _sampled(kernel).rows
+    coarse = frames(records, every=8, trace=rows)
+    assert len(coarse["trace"]) == len(rows)
+    assert all(0 <= row[0] < coarse["count"] for row in coarse["trace"])

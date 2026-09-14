@@ -17,21 +17,23 @@ from types import FrameType
 
 from collections.abc import Sequence
 
-from zeos.core.events import Event, JobBlocked, JobWoken
+from zeos.core.events import Event, JobBlocked, JobWoken, PipeWritten
 from zeos.core.ids import DescriptorName, JobId, PipeName
 from zeos.core.kernel import KernelConfig
 from zeos.descriptor.lint import Severity, lint
 from zeos.descriptor.loader import load_case
 from zeos.descriptor.schema import DescriptorError
-from zeos.driver import Driver, load_schedule
+from zeos.driver import Driver, build_kernel, load_schedule
 from zeos.journal.writer import Journal
-from zeos.machine.base import MachineRequest, OpKind, render
+from zeos.machine.base import MachineBackend, MachineRequest, OpKind, TracesRaw
+from zeos.core.pipes import PipeFull
+from zeos.machine.seat import CommandSeat, CommandSource, TapeSource, seat_maps
+from zeos.trace import RawTrace
 
 from zeos_coop_count import model as model_mod
-from zeos_coop_count.boot import build_kernel, seat_maps
+from zeos_coop_count.boot import llama_machine
 from zeos_coop_count.keyboard import Console
 from zeos_coop_count.machine import LlamaModel
-from zeos_coop_count.seat import CommandSeat, CommandSource
 
 __all__ = ["main"]
 
@@ -79,6 +81,10 @@ def _blocked_on(events: Sequence[Event], pipe: PipeName) -> bool:
     return False
 
 
+def _accountable(machine: object) -> TracesRaw | None:
+    return machine if isinstance(machine, TracesRaw) else None
+
+
 class _Stop(Exception):
     """SIGINT or SIGTERM, turned into an exception the run loop can unwind through."""
 
@@ -119,6 +125,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # -- live output ---------------------------------------------------------
     # These two callbacks show what a job said, and nothing the kernel decided.
     names: dict[JobId, str] = {}
+    commands: dict[JobId, int] = {}
     kernel_box: list[object] = []
 
     def name_of(job: JobId) -> str:
@@ -138,15 +145,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     def on_command(job: JobId, line: str, request: MachineRequest) -> None:
         nonlocal armed
+        commands[job] = commands.get(job, 0) + 1
         if said_at is not None and not armed:
             head, _, rest = line.partition(" ")
             armed = head == "say" and rest.strip().isdigit() and int(rest.strip()) >= said_at
         who = f"{name_of(job):<10}"
         if request.op is OpKind.WRITE:
-            print(
-                f"{who} \u2500\u2500\u25b6 {resolve(job, request.pipe):<12} {render(request.payload)}",
-                flush=True,
-            )
+            # Printed from the journal once the kernel has checked and landed it.
+            pass
         elif request.op is OpKind.READ:
             # Silent on purpose: whether a read waits is the kernel's call, and it has not
             # made it yet.
@@ -159,20 +165,30 @@ def _cmd_run(args: argparse.Namespace) -> int:
     def on_arrival(job: JobId, text: str) -> None:
         print(f"{name_of(job):<10} \u25c0\u2500\u2500 {text}", flush=True)
 
+    def deliver(pipe: PipeName, text: str) -> None:
+        try:
+            kernel.deliver(pipe, text)
+        except PipeFull as exc:
+            print(f"(dropped: {exc})", flush=True)
+
     def drain(seen: int) -> int:
         """Print the facts only the kernel knows, in the order the journal recorded them."""
         for event in events[seen:]:
-            if isinstance(event, JobBlocked):
+            if isinstance(event, PipeWritten) and event.job is not None:
+                who = f"{name_of(event.job):<10}"
+                print(
+                    f"{who} \u2500\u2500\u25b6 {event.pipe:<12} {' '.join(event.text)}", flush=True
+                )
+            elif isinstance(event, JobBlocked):
                 print(f"{name_of(event.job):<10} ... waiting on {event.pipe}", flush=True)
         return len(events)
 
+    machine: MachineBackend
     if args.machine in ("scripted", "claude", "claude-code"):
-        descriptors, valued = seat_maps(bundle)
+        descriptors, valued = seat_maps(bundle.descriptors, bundle.pipes)
         chosen = {"model": args.seat_model} if args.seat_model else {}
         source: CommandSource
         if args.machine == "scripted":
-            from zeos_coop_count.scripted import TapeSource
-
             source = TapeSource(bundle.scripts)
         elif args.machine == "claude":
             from zeos_coop_count.claude import ClaudeSource
@@ -182,35 +198,42 @@ def _cmd_run(args: argparse.Namespace) -> int:
             from zeos_coop_count.claude_code import ClaudeCodeSource
 
             source = ClaudeCodeSource(descriptors=descriptors, valued=valued, **chosen)
-        seat = CommandSeat(
+        machine = CommandSeat(
             source=source,
             block_size=args.block_size,
             on_command=on_command,
             on_arrival=on_arrival,
         )
-        kernel, transport, machine = build_kernel(
-            bundle,
-            machine=seat,
-            journal_sink=events,
-            config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
-        )
     else:
-        kernel, transport, machine = build_kernel(
+        assert model is not None
+        machine = llama_machine(
             bundle,
             model,
-            journal_sink=events,
-            config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
             block_size=args.block_size,
             n_ctx=args.n_ctx,
             n_threads=args.threads,
             on_command=on_command,
             on_arrival=on_arrival,
         )
+    kernel, transport = build_kernel(
+        bundle,
+        machine=machine,
+        journal_sink=events,
+        config=KernelConfig(seed=args.seed, case=bundle.name, max_ticks=args.max_ticks),
+    )
     kernel_box.append(kernel)
 
     journal = Journal(Path(args.journal) if args.journal else None)
-    driver = Driver(kernel, transport=transport, journal=journal)
+    trace: RawTrace | None = None
+    accountable = _accountable(machine)
+    if args.trace:
+        if accountable is None:
+            print(f"the {args.machine} seat gives no account of its windows", file=sys.stderr)
+            return 2
+        trace = RawTrace(Path(args.trace))
+    driver = Driver(kernel, transport=transport, journal=journal, trace=trace)
     driver.boot(bundle.boot)
+    sampled = len(events)
     schedule = load_schedule(Path(args.events)) if args.events else ()
 
     _install_signal_handlers()
@@ -237,16 +260,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
             while ticks < args.max_ticks:
                 while pending and pending[0].at_ns <= now_ns:
                     event = pending.pop(0)
-                    kernel.deliver(event.pipe, event.text)
+                    deliver(event.pipe, event.text)
 
                 # Between ticks: `on_command` runs mid-decode and the kernel is not re-entrant.
                 if armed and typed is not None:
                     if not pressed:
-                        kernel.deliver(interrupt_pipe, "attention")
+                        deliver(interrupt_pipe, "attention")
                         pressed = True
                     else:
                         # Sooner than a person could type, so the handler never parks on it.
-                        kernel.deliver(number_pipe, str(typed))
+                        deliver(number_pipe, str(typed))
                         typed = None
 
                 if console is not None:
@@ -260,10 +283,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             print("\n(already waiting for a number)", flush=True)
                             console.begin_number()
                         else:
-                            kernel.deliver(interrupt_pipe, "attention")
+                            deliver(interrupt_pipe, "attention")
                             console.begin_number()
                     if number is not None:
-                        kernel.deliver(number_pipe, number)
+                        deliver(number_pipe, number)
                         prompted = False
 
                     # While the handler is parked waiting for a number, the driver stops
@@ -278,6 +301,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 kernel.advance_time(now_ns)
                 ran = kernel.tick()
                 rendered = drain(rendered)
+                if trace is not None and accountable is not None:
+                    trace.sample(accountable, events[sampled:], sampled)
+                    sampled = len(events)
+                driver.reap_finished()
                 now_ns += Driver.DEFAULT_NS_PER_TICK
                 if ran:
                     ticks += 1
@@ -298,21 +325,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     journal.extend(events[len(journal) :])
     journal.close()
+    if trace is not None:
+        trace.close()
 
     print(
         f"\n{bundle.name}: stopped ({reason}) after {ticks} ticks, "
         f"{len(journal)} journal events, {time.time() - started:.1f}s"
     )
     for job in sorted(names):
+        line = f"  {name_of(job):<10} {commands.get(job, 0)} commands"
         try:
-            print(
-                f"  {name_of(job):<10} {len(machine.lines(job))} commands, "
-                f"{machine.stats(job).resident_tokens} resident tokens"
-            )
+            line += f", {machine.stats(job).resident_tokens} resident tokens"
         except KeyError:
-            pass
+            line += ", reaped"
+        print(line)
     if args.journal:
         print(f"journal written to {args.journal}")
+    if trace is not None:
+        print(f"machine trace written to {args.trace} ({len(trace)} rows)")
 
     machine.close()  # pyright: ignore[reportAttributeAccessIssue]
     if model is not None:
@@ -352,6 +382,12 @@ def main(argv: list[str] | None = None) -> int:
         "seat's own default",
     )
     p_run.add_argument("--journal", default=None)
+    p_run.add_argument(
+        "--trace",
+        default=None,
+        help="also write the machine's own account of each window: the model tokens under "
+        "each kernel word, the chat framing, and how far the KV cache reaches",
+    )
     p_run.add_argument("--events", default=None, help="JSONL schedule of external events")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--block-size", type=int, default=16)

@@ -1,6 +1,7 @@
 ---
 name: counter-a
 priority: 50
+on_fault: retry
 reads:
   # Only the peer's counter. This job's own progress is written and never read back: the
   # world holds it, and the other job is the one that needs it. Declaring it here would

@@ -4,15 +4,31 @@
 # This source code is licensed under the AGPL-3.0-only licence found in the
 # LICENSE file in the root directory of this source tree.
 
-"""What every machine seat shares: the syscall ABI, the pipe aliases, and the callbacks."""
+"""The seat: what sits between a model and the kernel, whatever the model is.
+
+A backend that runs a real model has three jobs the kernel does not do for it: chop what
+the model says into one token per decode, notice the token that completes a command and
+turn that command into a kernel request, and hand the model its own transcript afresh
+each time it is asked to speak -- afresh, because the kernel rewrites status regions and
+evicts spans in place, so a copy kept alongside drifts.
+
+``SyscallSeat`` is that machinery with no model in it. ``CommandSeat`` adds a
+``CommandSource`` -- a tape, an API, a local process -- and is a whole backend. A backend
+that samples token by token, as local weights do, inherits ``SyscallSeat`` and does its own
+decoding. Neither knows the words of the ABI: those come from a ``SyscallABI``.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from zeos.core.ids import JobId, TokenKind
+from zeos.core.framing import shown
+from zeos.core.ids import DescriptorName, JobId, TokenKind
+from zeos.core.pipes import PipeSpec
+from zeos.descriptor.schema import Descriptor
+from zeos.machine.abi import DEFAULT, SyscallABI
 from zeos.machine.base import (
     AttentionHint,
     ControlTokenViolation,
@@ -21,22 +37,57 @@ from zeos.machine.base import (
     OpKind,
     Token,
 )
-from zeos.machine.scripted import ScriptedMachine
-from zeos_coop_count.syscall import ALIASES, TERMINATOR, SyscallParser
+from zeos.machine.scripted import PAD_TOKEN, Script, ScriptedMachine, ScriptExhausted
 
-__all__ = ["CommandSeat", "CommandSource", "SyscallSeat", "Turn", "words_of"]
+__all__ = [
+    "CommandSeat",
+    "CommandSource",
+    "SyscallParser",
+    "SyscallSeat",
+    "TapeSource",
+    "Turn",
+    "bound_aliases",
+    "seat_maps",
+    "valued_aliases",
+    "words_of",
+]
 
 
-def words_of(command: str, *, lead: bool) -> list[str]:
+def words_of(command: str, *, terminator: str, lead: bool) -> list[str]:
     """Split one command into the words that carry it out, one per decode.
 
     Every word but the first carries a leading space, because the transcript is
     rebuilt by concatenation and the first token of a context has nothing to follow.
     """
     words = command.split()
-    if not words[-1].endswith(TERMINATOR):
-        words[-1] += TERMINATOR
+    if not words:
+        raise ValueError("a command needs at least one word")
+    if not words[-1].endswith(terminator):
+        words[-1] += terminator
     return [w if (i == 0 and not lead) else " " + w for i, w in enumerate(words)]
+
+
+@dataclass
+class SyscallParser:
+    """Collects decoded pieces and yields a request on the piece that closes a command."""
+
+    abi: SyscallABI = DEFAULT
+    buffer: str = ""
+    #: Every completed command, in order, kept for the transcript a CLI prints.
+    lines: list[str] = field(default_factory=list[str])
+
+    def feed(self, piece: str) -> MachineRequest:
+        self.buffer += piece
+        if self.abi.terminator not in self.buffer:
+            return MachineRequest()
+        line, _, rest = self.buffer.partition(self.abi.terminator)
+        self.buffer = rest
+        line = line.strip()
+        self.lines.append(line)
+        return self.abi.parse(line)
+
+    def reset(self) -> None:
+        self.buffer = ""
 
 
 class SyscallSeat:
@@ -45,11 +96,13 @@ class SyscallSeat:
     def __init__(
         self,
         *,
+        abi: SyscallABI = DEFAULT,
         descriptors: Mapping[str, Sequence[str]] | None = None,
         valued: Mapping[str, Sequence[str]] | None = None,
         on_command: Callable[[JobId, str, MachineRequest], None] | None = None,
         on_arrival: Callable[[JobId, str], None] | None = None,
     ) -> None:
+        self.abi = abi
         #: Maps a descriptor name to the pipe aliases it binds.
         self._descriptors: dict[str, tuple[str, ...]] = {
             k: tuple(v) for k, v in (descriptors or {}).items()
@@ -59,16 +112,12 @@ class SyscallSeat:
         self._on_command = on_command
         self._on_arrival = on_arrival
 
-    # -- what a descriptor may name ------------------------------------------
-
     def aliases(self, descriptor: str) -> tuple[str, ...]:
         """The pipe aliases this descriptor binds, or all of them if the seat knows none."""
-        return self._descriptors.get(descriptor, ALIASES)
+        return self._descriptors.get(descriptor, self.abi.aliases)
 
     def valued(self, descriptor: str) -> tuple[str, ...]:
         return self._valued.get(descriptor, ())
-
-    # -- the ABI --------------------------------------------------------------
 
     def consume(self, job: JobId, parser: SyscallParser, piece: str) -> MachineRequest:
         """Feed one decoded piece in, and report the request if it closed a command."""
@@ -90,7 +139,7 @@ class Turn:
     job: JobId
     #: The descriptor this job runs, which is what decides its pipes and its prose.
     descriptor: str
-    #: The job's context as text, kernel control tokens dropped: goal, working, arrivals.
+    #: The job's context as text: goal, working, arrivals, and the kernel's frames.
     transcript: str
     #: How many commands this job has already completed, so a source that plays a tape
     #: needs no per-job state of its own.
@@ -105,8 +154,36 @@ class CommandSource(Protocol):
     """Where a seat's next command comes from. One method, and no kernel to speak of."""
 
     def next_command(self, turn: Turn) -> str:
-        """One complete syscall command, such as ``say 41`` or ``write tools 50``."""
+        """One complete command, such as ``say 41`` or ``write tools 50``."""
         ...
+
+
+class TapeSource:
+    """A command source whose next command is the next step of the job's script.
+
+    A tape is the ``script:`` list in a descriptor's frontmatter, ``emit`` steps only:
+    each is one whole command, and the seat spends it one word per decode. Nothing here
+    reads the descriptor body or the status region, so a tape is only ever right for the
+    event schedule it was written against.
+    """
+
+    def __init__(self, scripts: Mapping[str, Script]) -> None:
+        self._scripts = dict(scripts)
+
+    def next_command(self, turn: Turn) -> str:
+        steps = self._scripts.get(turn.descriptor, Script()).steps
+        if turn.issued >= len(steps):
+            raise ScriptExhausted(
+                f"job {turn.job} ({turn.descriptor}) asked for command {turn.issued + 1} "
+                f"of a tape with {len(steps)}"
+            )
+        step = steps[turn.issued]
+        if not step.emit or step.request.op is not OpKind.NONE:
+            raise ValueError(
+                f"{turn.descriptor}: step {turn.issued + 1} is not a command; a seat plays "
+                "'emit' steps only, and asks the kernel through the words it emits"
+            )
+        return step.emit
 
 
 @dataclass
@@ -114,11 +191,17 @@ class _State:
     """What a seat knows about a job that ``ScriptedMachine`` does not."""
 
     descriptor: str
-    parser: SyscallParser = field(default_factory=SyscallParser)
+    parser: SyscallParser
     #: Words of the current command not yet given to the kernel; one leaves per decode.
     pending: list[str] = field(default_factory=list[str])
     tags: tuple[str, ...] = ("descriptor",)
     spoken: bool = False
+
+
+def _shown(tokens: Iterable[Token]) -> Iterator[str]:
+    """Tokens as a text-only source sees them: frames as they are, imitations escaped,
+    the machine's block padding left out."""
+    return (shown(t) for t in tokens if t != PAD_TOKEN)
 
 
 class CommandSeat(ScriptedMachine, SyscallSeat):
@@ -135,20 +218,19 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         self,
         *,
         source: CommandSource,
+        abi: SyscallABI = DEFAULT,
         block_size: int = 16,
         on_command: Callable[[JobId, str, MachineRequest], None] | None = None,
         on_arrival: Callable[[JobId, str], None] | None = None,
     ) -> None:
         ScriptedMachine.__init__(self, scripts=None, block_size=block_size)
-        SyscallSeat.__init__(self, on_command=on_command, on_arrival=on_arrival)
+        SyscallSeat.__init__(self, abi=abi, on_command=on_command, on_arrival=on_arrival)
         self._source = source
         self._state: dict[JobId, _State] = {}
 
-    # -- lifecycle -----------------------------------------------------------
-
     def create_context(self, job: JobId, descriptor: str = "") -> None:
         super().create_context(job, descriptor)
-        self._state[job] = _State(descriptor=descriptor)
+        self._state[job] = _State(descriptor=descriptor, parser=SyscallParser(self.abi))
 
     def destroy_context(self, job: JobId) -> None:
         super().destroy_context(job)
@@ -159,8 +241,6 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         if state is None:
             raise KeyError(f"no context for job {job}; create_context first")
         return state
-
-    # -- the ops that differ from a tape -------------------------------------
 
     def decode(self, job: JobId, *, allow_control: bool) -> DecodeResult:
         ctx = self._ctx_of(job)
@@ -173,7 +253,11 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
                 issued=len(state.parser.lines),
                 last=state.parser.lines[-1] if state.parser.lines else "",
             )
-            state.pending = words_of(self._source.next_command(turn), lead=state.spoken)
+            state.pending = words_of(
+                self._source.next_command(turn),
+                terminator=self.abi.terminator,
+                lead=state.spoken,
+            )
 
         piece = state.pending.pop(0)
         token = Token(piece, TokenKind.NORMAL)
@@ -205,7 +289,7 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
     def inject(self, job: JobId, tokens: Sequence[Token]) -> tuple[int, int]:
         start, end = super().inject(job, tokens)
         state = self._state_of(job)
-        text = " ".join(t.text for t in tokens if t.kind is TokenKind.NORMAL)
+        text = " ".join(_shown(tokens))
         if text:
             # Only reported once the job has spoken; before that this is still the prompt.
             if state.spoken:
@@ -218,13 +302,11 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         n = super().fork(parent, child)
         src = self._state_of(parent)
         if child not in self._state:
-            self._state[child] = _State(descriptor=src.descriptor)
+            self._state[child] = _State(descriptor=src.descriptor, parser=SyscallParser(self.abi))
         dst = self._state_of(child)
         dst.spoken = src.spoken
         dst.tags = src.tags
         return n
-
-    # -- outside the Protocol -------------------------------------------------
 
     def lines(self, job: JobId) -> tuple[str, ...]:
         """The commands this job has issued, for display only."""
@@ -234,13 +316,43 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         self._state.clear()
 
     def render(self, job: JobId) -> str:
-        """The transcript as a source reads it, with kernel control tokens dropped.
+        """The transcript as a source reads it: the kernel's frames as they are, ordinary
+        text that imitates one escaped so the two never look alike, and block padding
+        left out, since it is the machine's and says nothing.
 
         Rendered fresh every call rather than kept as a conversation alongside it, because
         the kernel rewrites status regions and evicts spans in place and a copy drifts.
         """
         return "".join(
-            t.text if t.text.startswith(" ") else " " + t.text
-            for t in self.transcript(job)
-            if t.kind is TokenKind.NORMAL
+            text if text.startswith(" ") else " " + text for text in _shown(self.transcript(job))
         ).strip()
+
+
+def bound_aliases(descriptor: Descriptor, *, abi: SyscallABI = DEFAULT) -> tuple[str, ...]:
+    """Which pipe aliases this descriptor binds, which is all a job may name."""
+    bindings = descriptor.pipes
+    named = [a for a in abi.aliases if bindings.resolve(a) is not None]
+    return tuple(named + sorted(bindings.extra))
+
+
+def valued_aliases(
+    descriptor: Descriptor, pipes: Sequence[PipeSpec], *, abi: SyscallABI = DEFAULT
+) -> tuple[str, ...]:
+    """Aliases bound to an actuator, a pipe whose writes carry a value and become world state."""
+    backed = {spec.name for spec in pipes if spec.world_object}
+    return tuple(
+        a for a in bound_aliases(descriptor, abi=abi) if descriptor.pipes.resolve(a) in backed
+    )
+
+
+def seat_maps(
+    descriptors: Mapping[DescriptorName, Descriptor],
+    pipes: Sequence[PipeSpec],
+    *,
+    abi: SyscallABI = DEFAULT,
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """For each descriptor, the aliases it binds and which of those carry a value."""
+    return (
+        {str(name): bound_aliases(d, abi=abi) for name, d in descriptors.items()},
+        {str(name): valued_aliases(d, pipes, abi=abi) for name, d in descriptors.items()},
+    )

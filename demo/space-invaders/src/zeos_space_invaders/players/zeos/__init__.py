@@ -15,17 +15,15 @@ with `api_openai.py` and `api_claude.py` as the two wire formats.
 
 from .api_claude import ClaudeAPIMachine
 from .api_machine import (
-    ALIASES,
+    ABI,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_STALL_S,
     FORMATS,
     PAD_TOKEN,
     PARTIAL,
-    VERBS,
     APIMachineBase,
     Native,
     Piece,
-    parse_syscall,
 )
 from .api_openai import OpenAIAPIMachine, SDKMissing
 from .player import (
@@ -55,7 +53,7 @@ from .player import (
 )
 
 __all__ = [
-    "ALIASES",
+    "ABI",
     "BLOCK_SIZE",
     "CASE_ROOT",
     "DEFAULT_BLOCK_SIZE",
@@ -72,7 +70,6 @@ __all__ = [
     "REFLEX_HORIZON",
     "RESUME",
     "RESUME_END",
-    "VERBS",
     "APIMachineBase",
     "ClaudeAPIMachine",
     "Decision",
@@ -90,6 +87,5 @@ __all__ = [
     "evade_behaviour",
     "kernel_version",
     "load_criteria",
-    "parse_syscall",
     "threat_reading",
 ]

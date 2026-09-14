@@ -1,6 +1,7 @@
 ---
 name: counter-a
 priority: 50
+on_fault: retry
 budget:
   # One segment is ten `say`s and three commands. The budget is a backstop against a job
   # that never reaches its `exit;` -- with `policy: queue` on the vector, an instance that

@@ -16,10 +16,10 @@ import pytest
 
 from zeos.core.ids import JobId
 from zeos.descriptor.loader import load_case
+from zeos.machine.seat import CommandSeat, TapeSource, Turn
+
 from zeos_coop_count import claude as claude_mod
 from zeos_coop_count.cli import main
-from zeos_coop_count.scripted import TapeSource
-from zeos_coop_count.seat import CommandSeat, Turn
 
 CASE = Path(__file__).resolve().parent.parent / "cases" / "coop-count-scripted"
 

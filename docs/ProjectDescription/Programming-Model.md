@@ -173,6 +173,10 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
 - name: user.commands
   ring: TRUSTED           # authenticated household members
   principal: user
+- name: user.replies
+  ring: TRUSTED
+  principal: user
+  sink: true              # written by jobs, drained by the driver for the household
 - name: frontdoor.mic
   ring: EXTERNAL          # ring 3: an open-air microphone
   principal: user
@@ -181,6 +185,8 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
   principal: device
   world_object: house.alert
 ```
+
+`user.replies` is a *sink*, the third kind of pipe (core design §4.5): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
 
 ```yaml
 # world-state.yaml
@@ -221,6 +227,6 @@ Revalidate your current plan step before acting. </RESUME>
 
 **A household member asks for a spoon.** "Fetch me a spoon" arrives on `user.commands` with Alice's authenticated principal. It *compiles*: `fetch-item` declared the phrasing, Alice's envelope holds `actuators.arm`, and the dispatcher spawns `fetch-item(item=spoon)` within her ceiling. The robot fetches the spoon; the journal records who spoke, what was compiled, and what ran.
 
-**A malicious neighbour asks it to break the window.** "Go break the kitchen window" arrives on `frontdoor.mic`. It does not compile: no descriptor declares any such utterance, so there is no compilation target -- nothing for eloquence to persuade. Suppose the neighbour gets creative and phrases it as a fetch ("bring me the window glass"): the compiled job runs at `mic:unauthenticated`'s envelope, which holds no `actuators.arm` capability, so the actuation raises a **capability fault** at the kernel boundary and the arm never moves. And because the words entered on a ring-3 pipe, any job that attends them is demoted below `min_integrity: 2` anyway -- a second, independent floor. The refusal is not the model's judgment; it is `rm -rf /` failing for a non-root user, and the journal records which gate answered.
+**A malicious neighbour asks it to break the window.** "Go break the kitchen window" arrives on `frontdoor.mic`. It does not compile: no descriptor declares any such utterance, so there is no compilation target -- nothing for eloquence to persuade. Suppose the neighbour gets creative and phrases it as a fetch ("bring me the window glass"): the compiled job runs at `mic:unauthenticated`'s envelope, which holds no `actuators.arm` capability, so the actuation raises a **capability fault** at the kernel boundary and the arm never moves. And because the words entered on a ring-3 pipe, any job that attends them is demoted below `min_integrity: 2` anyway -- a second, independent floor. The refusal is not the model's judgment; it is `rm -rf /` failing for a non-root user, and the journal records which gate answered. If a job that heard the neighbour did write some object, say `robot.position`, the object would carry ring 3, and every job that reads it would be demoted by it. Tainted state is contained, not only tainted actions.
 
 The whole-system properties -- smoke beats tidying, tidying resumes and re-checks the world, strangers cannot actuate -- are *consequences* of a few integers, pipe bindings, and ring assignments in the files above, not sentences a prompt author must get right in prose and the model must weigh correctly under pressure.

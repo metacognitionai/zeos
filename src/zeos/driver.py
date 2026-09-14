@@ -12,7 +12,9 @@ and this is it. The driver owns:
 * **time** -- it decides what "now" is and tells the kernel via ``advance_time``;
 * **device adapters** -- turning external events into pipe writes (core §4.3);
 * **transports** -- polling for anything arriving from a peer node;
-* **the journal file** -- the kernel emits events, the driver persists them.
+* **the journal file** -- the kernel emits events, the driver persists them;
+* **the machine's trace** -- after each tick, a machine that can account for its
+  own windows is asked to, and the answer goes to a file beside the journal.
 
 Keeping this boundary sharp is what makes the whole thing replayable. In a test the
 schedule is a list; in deployment it is a sensor feed; the kernel cannot tell the
@@ -27,19 +29,21 @@ determinism depends on.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from zeos.core.events import Event
 from zeos.core.ids import DescriptorName, ObjectName, PipeName
 from zeos.core.kernel import Kernel, KernelConfig
-from zeos.core.pipes import PipeTable
+from zeos.core.pipes import PipeFull, PipeTable
 from zeos.core.resources import ResourceTable
 from zeos.core.vectors import VectorTable
 from zeos.descriptor.loader import CaseBundle
 from zeos.journal.writer import Journal
+from zeos.machine.base import MachineBackend, Token, TracesRaw
 from zeos.machine.scripted import ScriptedMachine
+from zeos.trace import RawTrace
 from zeos.transport.base import PipeTransport
 from zeos.transport.local import LocalTransport
 from zeos.world.store import WorldStore
@@ -94,12 +98,14 @@ def load_schedule(path: Path) -> tuple[ScheduledEvent, ...]:
 def build_kernel(
     bundle: CaseBundle,
     *,
+    machine: MachineBackend | None = None,
     journal_sink: list[Event] | None = None,
     config: KernelConfig | None = None,
     block_size: int = 16,
 ) -> tuple[Kernel, PipeTransport]:
-    """Assemble a kernel from a loaded case."""
-    machine = ScriptedMachine(bundle.scripts, block_size=block_size)
+    """Assemble a kernel from a loaded case, on the case's own scripts unless a machine is given."""
+    if machine is None:
+        machine = ScriptedMachine(bundle.scripts, block_size=block_size)
     pipes = PipeTable(bundle.pipes)
     world = WorldStore()
     kernel = Kernel(
@@ -136,12 +142,29 @@ class Driver:
         *,
         transport: PipeTransport | None = None,
         journal: Journal | None = None,
+        trace: RawTrace | None = None,
         ns_per_tick: int = DEFAULT_NS_PER_TICK,
+        reap: bool = True,
+        on_drain: Callable[[PipeName, tuple[Token, ...]], None] | None = None,
     ) -> None:
+        if trace is not None and not isinstance(kernel.machine, TracesRaw):
+            raise TypeError(
+                f"{type(kernel.machine).__name__} gives no account of its windows; "
+                "a trace needs a machine that implements TracesRaw"
+            )
         self.kernel = kernel
         self.transport = transport
         self.journal = journal
+        self.trace = trace
         self.ns_per_tick = ns_per_tick
+        self.on_drain = on_drain
+        #: Give a finished job's context back as soon as it is terminal. Off for a run
+        #: that wants every transcript still materialised at the end.
+        self.reap = reap
+        #: Deliveries the kernel refused because the pipe was full, in order. Each is
+        #: also in the journal as ``PipeBackpressure``; the driver drops rather than
+        #: retries, since a schedule replays the same way every time.
+        self.refused: list[tuple[PipeName, str]] = []
         self._persisted = 0
         self._now_ns = 0
 
@@ -150,12 +173,14 @@ class Driver:
 
         Streaming rather than dumping at the end: a run killed mid-flight -- which is
         exactly what a thrash or starvation investigation looks like -- should still
-        leave an analysable journal behind.
+        leave an analysable journal behind. Once per tick, because the machine's
+        account is sampled here.
         """
-        if self.journal is None:
-            return
         pending = self.kernel.events[self._persisted :]
-        self.journal.extend(pending)
+        if self.journal is not None:
+            self.journal.extend(pending)
+        if self.trace is not None and isinstance(self.kernel.machine, TracesRaw):
+            self.trace.sample(self.kernel.machine, pending, self._persisted)
         self._persisted += len(pending)
 
     def boot(self, descriptors: Sequence[DescriptorName]) -> None:
@@ -178,7 +203,7 @@ class Driver:
             ticks += self._run_until(event.at_ns)
             self.kernel.advance_time(max(event.at_ns, self._now_ns))
             self._now_ns = self.kernel.clock.virtual_ns
-            self.kernel.deliver(event.pipe, event.text)
+            self._deliver(event.pipe, event.text)
             self._flush()
         ticks += self._run_until(None)
         self._poll_transport()
@@ -196,8 +221,30 @@ class Driver:
                 break
             self._now_ns += self.ns_per_tick
             ticks += 1
-        self._flush()
+            self._settle()
+        self._settle()
         return ticks
+
+    def _settle(self) -> None:
+        """What follows a tick: sinks drained, finished jobs reaped, the journal flushed."""
+        self._drain_sinks()
+        self.reap_finished()
+        self._flush()
+
+    def reap_finished(self) -> None:
+        """Release every terminal job's context, unless this run keeps them. A loop
+        that unrolls ``run`` calls this after each tick."""
+        if self.reap:
+            for job_id in self.kernel.unreaped():
+                self.kernel.reap(job_id)
+
+    def _drain_sinks(self) -> None:
+        """Take what jobs wrote for the world out of every sink, the mirror of ``deliver``."""
+        for pipe in self.kernel.pipes.all():
+            if pipe.spec.sink and pipe.available:
+                tokens = self.kernel.drain(pipe.name)
+                if self.on_drain is not None:
+                    self.on_drain(pipe.name, tokens)
 
     def _poll_transport(self) -> None:
         """Drain anything arriving from a peer node.
@@ -209,4 +256,10 @@ class Driver:
         if self.transport is None:
             return
         for frame in self.transport.poll():
-            self.kernel.deliver(frame.pipe, " ".join(t.text for t in frame.tokens))
+            self._deliver(frame.pipe, " ".join(t.text for t in frame.tokens))
+
+    def _deliver(self, pipe: PipeName, text: str) -> None:
+        try:
+            self.kernel.deliver(pipe, text)
+        except PipeFull:
+            self.refused.append((pipe, text))

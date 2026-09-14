@@ -227,6 +227,7 @@ def _load_pipes(path: Path) -> tuple[PipeSpec, ...]:
                 capacity_tokens=int(spec.get("capacity", DEFAULT_CAPACITY)),
                 transport=str(spec.get("transport", "local")),
                 device=bool(spec.get("device", False)),
+                sink=bool(spec.get("sink", False)),
                 world_object=(
                     None if spec.get("world_object") is None else str(spec["world_object"])
                 ),

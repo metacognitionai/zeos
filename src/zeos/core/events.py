@@ -234,6 +234,8 @@ class JobResumed(Event):
     resume_kind: ResumeKind  # not ``kind``: that name belongs to the record envelope
     suspended_ns: int
     dirty: tuple[StateDelta, ...] = ()
+    #: The job was blocked, waiting for something it asked for, rather than displaced.
+    waited: bool = False
 
 
 @event_class
@@ -493,6 +495,17 @@ class PipeWritten(Event):
 
 @event_class
 @dataclass(frozen=True)
+class PipeDrained(Event):
+    """The driver took everything out of a sink pipe and handed it to the world."""
+
+    KIND: ClassVar[str] = "pipe.drained"
+
+    pipe: PipeName
+    tokens: int
+
+
+@event_class
+@dataclass(frozen=True)
 class PipeReadEvent(Event):
     KIND: ClassVar[str] = "pipe.read"
 
@@ -512,7 +525,7 @@ class PipeBackpressure(Event):
     KIND: ClassVar[str] = "pipe.backpressure"
 
     pipe: PipeName
-    job: JobId
+    job: JobId | None  # None when a device's delivery was refused
     capacity_tokens: int
 
 
@@ -1157,7 +1170,7 @@ class GateConsulted(Event):
 
     KIND: ClassVar[str] = "nli.gate_consulted"
 
-    job: JobId
+    job: JobId | None  # None when the kernel asks on behalf of a delivery
     pipe: PipeName
     gate: DescriptorName
     gate_job: JobId
@@ -1175,7 +1188,7 @@ class GateAnswered(Event):
 
     KIND: ClassVar[str] = "nli.gate_answered"
 
-    job: JobId
+    job: JobId | None  # None when the kernel asks on behalf of a delivery
     pipe: PipeName
     gate: DescriptorName
     allowed: bool

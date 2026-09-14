@@ -440,13 +440,15 @@ def test_narrowing_to_zero_means_nothing_not_everything() -> None:
     assert not [w for w in of(events, PipeWritten) if w.pipe == BARRIER]
 
 
-def test_an_undeclared_capability_table_is_still_open() -> None:
-    """The other half: a behaviour that declares nothing is unprotected *by choice*,
-    and N0 must not have quietly made every such descriptor unable to act."""
+def test_an_undeclared_capability_table_still_writes_its_bindings() -> None:
+    """The other half: a behaviour that declares no capabilities may still write the
+    pipes it binds, and N0 must not have quietly made every such descriptor unable
+    to act."""
     plain = {
         "name": "plain",
         "priority": 60,
         "utterances": ["write a report"],
+        "pipes": {"stdout": str(REPORT)},
     }
     kernel, events = build(
         [plain],

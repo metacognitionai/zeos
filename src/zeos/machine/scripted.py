@@ -46,6 +46,8 @@ from zeos.machine.base import (
     DecodeResult,
     MachineRequest,
     OpKind,
+    RawWindow,
+    RawWord,
     SpliceResult,
     Token,
     tokens_from_text,
@@ -129,7 +131,7 @@ class Script:
             emit = str(raw.get("emit", "") or "")
             hint: AttentionHint | None = None
             if "attend" in raw:
-                hint = AttentionHint(tags=_as_str_tuple(raw["attend"]))
+                hint = AttentionHint(tags=_as_str_tuple(raw["attend"]), declared=True)
 
             request = MachineRequest()
             if "read" in raw:
@@ -343,6 +345,14 @@ class ScriptedMachine:
 
     def transcript(self, job: JobId) -> tuple[Token, ...]:
         return tuple(self._ctx_of(job).tokens)
+
+    def raw(self, job: JobId) -> RawWindow:
+        """A word is one token here and there is no cache, so the account is the
+        transcript itself with everything resident."""
+        tokens = self._ctx_of(job).tokens
+        return RawWindow(
+            words=tuple(RawWord(pieces=(t.text,)) for t in tokens), kv_resident=len(tokens)
+        )
 
     # -- synthetic attention -------------------------------------------------
 

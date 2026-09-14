@@ -1,6 +1,7 @@
 ---
 name: reset-count
 priority: 5
+on_fault: retry
 budget:
   tokens: 64
 reads:

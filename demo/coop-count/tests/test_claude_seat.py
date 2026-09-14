@@ -14,8 +14,9 @@ import pytest
 
 from zeos.core.ids import JobId, TokenKind
 from zeos.machine.base import OpKind
+from zeos.machine.seat import CommandSeat, Turn
+
 from zeos_coop_count.claude import one_command
-from zeos_coop_count.seat import CommandSeat, Turn
 
 JOB = JobId(1)
 
@@ -77,14 +78,15 @@ def test_a_read_becomes_a_read_request(seat: tuple[CommandSeat, Replies]) -> Non
     assert machine.lines(JOB)[-1] == "read stdin"
 
 
-def test_a_reply_that_is_not_a_command_becomes_a_say() -> None:
-    """A reply with no command in it is recorded as a ``say`` instead."""
+def test_a_reply_that_is_not_a_command_is_decoded_as_spoken_and_faulted() -> None:
+    """A reply with no command in it is not dressed up as a ``say``: the words go into
+    the transcript as the model produced them, and the kernel is asked to fault it."""
     machine, _ = build(["I think I should probably count to fifty next."])
 
-    ops = drive(machine, 10)
+    ops = drive(machine, 9)
 
-    assert all(op is OpKind.NONE for op in ops)
-    assert machine.lines(JOB)[0].startswith("say I think")
+    assert ops[:-1] == [OpKind.NONE] * 8 and ops[-1] is OpKind.MALFORMED
+    assert machine.lines(JOB) == ("I think I should probably count to fifty next.",)
 
 
 def test_prose_around_a_command_is_discarded() -> None:

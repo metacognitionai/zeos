@@ -95,6 +95,7 @@ PIPES = [
 
 RESEARCHER = {
     "name": "research-web",
+    "pipes": {"stdin": "web.fetch"},
     "priority": 50,
     "integrity": {"start": 2, "dynamics": "low-watermark"},
     "capabilities": [
@@ -277,6 +278,7 @@ def test_writing_to_an_unheld_pipe_is_a_capability_fault() -> None:
 
 PARENT = {
     "name": "supervisor",
+    "pipes": {"stdin": "web.fetch"},
     "priority": 50,
     "integrity": {"start": 1},
     "capabilities": [{"pipe": "web.fetch", "min_integrity": 3}],
@@ -284,7 +286,12 @@ PARENT = {
         {"name": "reader", "descriptor": "web-reader", "integrity": 3, "grants": ["web.fetch"]}
     ],
 }
-CHILD = {"name": "web-reader", "priority": 60, "integrity": {"start": 3}}
+CHILD = {
+    "name": "web-reader",
+    "priority": 60,
+    "integrity": {"start": 3},
+    "pipes": {"stdin": "web.fetch"},
+}
 
 
 def test_compartment_child_cannot_attend_the_parents_secrets() -> None:

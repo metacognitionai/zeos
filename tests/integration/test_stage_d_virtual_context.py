@@ -102,6 +102,7 @@ def of[E: Event](events: Sequence[Event], cls: type[E]) -> list[E]:
 LONG_JOB = {
     "name": "patrol",
     "priority": 80,
+    "pipes": {"stdin": "web.fetch"},
     "context": {
         "window": 300,
         "eviction": "attention-clock",

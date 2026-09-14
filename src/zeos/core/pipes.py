@@ -28,16 +28,20 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from zeos.core.ids import JobId, PipeName, Principal, Ring
+from zeos.core.ids import KERNEL_PIPE, Integrity, JobId, PipeName, Principal, Ring
 from zeos.machine.base import Token
 
-__all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "DEFAULT_CAPACITY"]
+__all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "PipeFull", "Write", "DEFAULT_CAPACITY"]
 
 DEFAULT_CAPACITY = 4096
 
 
 class PipeError(RuntimeError):
     """Structural misuse of a pipe -- an unknown name, or a capacity of zero."""
+
+
+class PipeFull(PipeError):
+    """A delivery that does not fit. Nothing of it landed; the driver decides what next."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +64,28 @@ class PipeSpec:
     #: (core §4.3) -- the outbound direction, where a pipe write becomes an effect.
     #: It is what lets a job's writes show up in another job's resume diff.
     world_object: str | None = None
+    #: Sink pipes: written by a job, drained by the driver for the outside world -- the
+    #: other outbound kind, a history rather than a value, and ``deliver``'s mirror.
+    sink: bool = False
+
+    @property
+    def floor(self) -> Integrity:
+        """The pipe's ring as an integrity: the cleanest anything read from it can be."""
+        return Integrity(int(self.ring))
+
+    def __post_init__(self) -> None:
+        if self.name == KERNEL_PIPE:
+            raise PipeError(f"pipe {self.name!r} is reserved for the kernel's own notices")
+        if self.sink and self.world_object:
+            raise PipeError(f"pipe {self.name!r} cannot be both a sink and an actuator")
+
+
+@dataclass(frozen=True, slots=True)
+class Write:
+    """One write still in a pipe: how many tokens, and how clean the writer was."""
+
+    tokens: int
+    integrity: Integrity
 
 
 @dataclass
@@ -75,6 +101,10 @@ class Pipe:
     waiting_writers: deque[JobId] = field(default_factory=deque[JobId])
     #: Total tokens ever written. Feeds vector coalescing and telemetry.
     total_written: int = 0
+    #: Each write still in the buffer, oldest first: a vector firing takes exactly the
+    #: write that fired it, and a reader receives content at the worse of the pipe's
+    #: ring and its writer's integrity, so a trusted pipe cannot launder a dirty writer.
+    writes: deque[Write] = field(default_factory=deque[Write])
 
     @property
     def name(self) -> PipeName:
@@ -97,7 +127,7 @@ class Pipe:
     def writable(self, n: int = 1) -> bool:
         return self.free >= n
 
-    def latch(self, tokens: Sequence[Token]) -> int:
+    def latch(self, tokens: Sequence[Token], integrity: Integrity | None = None) -> int:
         """Replace the buffer with ``tokens``: the current value, not a history.
 
         For a pipe backed by a ``world_object``. A write to one of those is an *effect*
@@ -108,21 +138,50 @@ class Pipe:
         against its own buffer and is never woken.
         """
         self.buffer.clear()
-        return self.write(tokens)
+        self.writes.clear()
+        return self.write(tokens, integrity)
 
-    def write(self, tokens: Sequence[Token]) -> int:
+    def write(self, tokens: Sequence[Token], integrity: Integrity | None = None) -> int:
         """Append what fits. Returns the number accepted; a short write means the
-        writer must block for the remainder (backpressure)."""
+        writer must block for the remainder (backpressure). ``integrity`` is the
+        writer's; a device's or the kernel's write is as clean as the pipe."""
         accepted = min(len(tokens), self.free)
         for token in tokens[:accepted]:
             self.buffer.append(token)
         self.total_written += accepted
+        if accepted:
+            floor = self.spec.floor
+            self.writes.append(Write(accepted, max(floor, integrity or floor)))
         return accepted
 
     def read(self, n: int | None = None) -> tuple[Token, ...]:
         """Take up to ``n`` tokens (all available if ``None``)."""
+        return self.take(n)[0]
+
+    def take(self, n: int | None = None) -> tuple[tuple[Token, ...], Integrity]:
+        """Take up to ``n`` tokens (all available if ``None``) and the worst integrity
+        among the writes they came from, which is what the reader receives them at."""
         count = self.available if n is None else min(n, self.available)
-        return tuple(self.buffer.popleft() for _ in range(count))
+        carried = self._consume(count)
+        return tuple(self.buffer.popleft() for _ in range(count)), carried
+
+    def take_write(self) -> tuple[tuple[Token, ...], Integrity]:
+        """Take the oldest write, whole, and nothing of the writes behind it."""
+        if not self.writes:
+            return (), self.spec.floor
+        return self.take(self.writes[0].tokens)
+
+    def _consume(self, count: int) -> Integrity:
+        worst = self.spec.floor
+        while count > 0 and self.writes:
+            head = self.writes[0]
+            worst = max(worst, head.integrity)
+            if head.tokens <= count:
+                count -= self.writes.popleft().tokens
+            else:
+                self.writes[0] = Write(head.tokens - count, head.integrity)
+                count = 0
+        return worst
 
     def peek(self) -> tuple[Token, ...]:
         return tuple(self.buffer)

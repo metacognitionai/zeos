@@ -39,11 +39,11 @@ synthetic.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from zeos.core.ids import Integrity, SegmentId
-from zeos.core.segments import SegmentTable
+from zeos.core.segments import SegmentRecord, SegmentTable
 
 __all__ = [
     "DEFAULT_THETA_READ",
@@ -91,24 +91,27 @@ def demote_for_boundary(
 
     ``max`` is *worse* in this numbering -- 0 is most trusted -- which is why the
     convention is shared with rings and priorities. Reading it as "the worst thing
-    you meaningfully looked at" is the whole rule.
+    you meaningfully looked at" is the whole rule. A masked segment cannot demote: it
+    was never attended, because the bitmap excluded its blocks from the forward pass.
     """
-    attended: list[SegmentId] = []
-    worst = int(current)
-    for segment_id, mass in sorted(mass_this_block.items()):
-        if mass < theta_read:
-            continue
-        record = table.get(segment_id) if segment_id in table else None
-        if record is None or not record.readable:
-            # A masked segment cannot demote: it was never attended, because the
-            # bitmap excluded its blocks from the forward pass entirely.
-            continue
-        if int(record.integrity) > worst:
-            worst = int(record.integrity)
-        if int(record.integrity) > int(current):
-            attended.append(segment_id)
+    attended = [
+        table.get(segment_id)
+        for segment_id, mass in sorted(mass_this_block.items())
+        if mass >= theta_read and segment_id in table and table.get(segment_id).readable
+    ]
+    return _demote(current, attended)
 
-    return Demotion(before=current, after=Integrity(worst), because=tuple(attended))
+
+def demote_by_provenance(current: Integrity, *, table: SegmentTable) -> Demotion:
+    """The low-water-mark rule when attention cannot be measured: every readable
+    segment counts as attended, so the job falls to the worst thing it could see."""
+    return _demote(current, [r for r in table.all() if r.readable and r.tokens > 0])
+
+
+def _demote(current: Integrity, attended: Sequence[SegmentRecord]) -> Demotion:
+    worst = max([int(current), *(int(r.integrity) for r in attended)])
+    because = tuple(r.id for r in attended if int(r.integrity) > int(current))
+    return Demotion(before=current, after=Integrity(worst), because=because)
 
 
 def effective_integrity(current: Integrity, session_floor: Integrity | None) -> Integrity:

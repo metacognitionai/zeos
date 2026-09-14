@@ -26,10 +26,10 @@ from zeos.core.ids import JobId, TokenKind
 from zeos.machine.base import Token, tokens_from_text
 
 from zeos_space_invaders.players.zeos import (
+    ABI,
     FORMATS,
     PARTIAL,
     OpenAIAPIMachine,
-    parse_syscall,
 )
 from zeos_space_invaders.players.zeos.api_machine import IN, OUT, PAD, THINK, VOID
 
@@ -65,11 +65,11 @@ def drain(machine, job, stop="read", limit=400):
         ("read stdin;", "read", "stdin", []),
         ("write stdout go now;", "write", "stdout", ["go", "now"]),
         ("exit;", "exit", None, []),
-        ("say something;", "none", None, []),
+        ("say something;", "malformed", None, []),
     ],
 )
 def test_the_text_abi_reads_a_clause(clause, op, pipe, payload):
-    request = parse_syscall(clause)
+    request = ABI.parse(clause)
     assert request.op.value == op
     assert (str(request.pipe) if request.pipe else None) == pipe
     assert [t.text for t in request.payload] == payload
@@ -81,6 +81,7 @@ def test_a_clause_begins_at_a_verb_and_not_at_the_last_semicolon():
     for word in ["I'll", "wait", "for", "input.", "read", "stdin;"]:
         request = machine._request_from_text(machine._ctx[job], word)
     assert request.op.value == "read"
+    assert machine._ctx[job].parser.lines == ["read stdin"]
 
 
 def test_the_schema_narrows_to_the_descriptors_own_vocabulary():
@@ -480,9 +481,9 @@ def test_a_cancelled_completion_leaves_no_half_clause_behind():
         client=StubChatClient(["x"]), syscall_format="text", stall_s=0.001
     )
     job = opened(machine)
-    machine._ctx[job].clause = "write stdout le"
+    machine._ctx[job].parser.feed("write stdout le")
     machine.inject(job, tokens_from_text("a new board"))
-    assert machine._ctx[job].clause == ""
+    assert machine._ctx[job].parser.buffer == ""
     machine.close()
 
 

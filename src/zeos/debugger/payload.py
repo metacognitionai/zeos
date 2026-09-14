@@ -29,7 +29,9 @@ be a fact nobody could verify after the run.
 **Tokens are both.** What is sitting in a pipe right now is state, so it rides in
 the frame as ``PipeView.contents``. What a job has said is history, so it rides
 beside the frames as a flat log -- see ``_token_log`` for why a history inside a
-delta-encoded frame is quadratic.
+delta-encoded frame is quadratic. A job's window is rebuilt the same way, from the
+operations that changed it (``_context_log``), and ``replay_context`` is the
+specification of what the page rebuilds.
 
 Frames are delta-encoded because a run is long and a frame is not small. The
 encoding is mechanical -- changed keys, and changed rows of the keyed lists -- and
@@ -40,11 +42,23 @@ shallow merge, but the proof that the merge is lossless is in Python.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from zeos.core import serde
-from zeos.core.events import Decoded, Injected, PipeReadEvent, PipeWritten
+from zeos.core.events import (
+    BlockBoundary,
+    Decoded,
+    Forked,
+    Injected,
+    PermsChanged,
+    PipeReadEvent,
+    PipeWritten,
+    SegmentEvicted,
+    SegmentOpened,
+    Spliced,
+)
 from zeos.core.gates import GateTable
 from zeos.core.principals import PrincipalTable
 from zeos.descriptor.lint import Finding
@@ -55,11 +69,13 @@ from zeos.monitor.state import MARKED_KINDS, SystemView, fold
 
 __all__ = [
     "ALIAS_KIND",
+    "CONTEXT_OPS",
     "KEYED",
     "MOVEMENTS",
     "apply_delta",
     "build_payload",
     "frames",
+    "replay_context",
     "structure",
 ]
 
@@ -394,6 +410,12 @@ MOVEMENTS: Mapping[str, str] = {
 }
 
 
+def _frame_of(index: int, *, every: int, count: int) -> int:
+    """The first frame that reflects event ``index``: ``fold`` snapshots after event
+    ``k * every``, so that is the one at ``ceil(index / every)``."""
+    return min(-(-index // every), count - 1)
+
+
 def _token_log(records: Sequence[JournalRecord], *, every: int, count: int) -> list[list[Any]]:
     """Every token that moved, in journal order, tagged with the frame it lands on.
 
@@ -408,9 +430,7 @@ def _token_log(records: Sequence[JournalRecord], *, every: int, count: int) -> l
     """
     log: list[list[Any]] = []
     for index, record in enumerate(records):
-        # ``fold`` snapshots after applying event ``k * every``, so the first frame
-        # that reflects event ``index`` is the one at ``ceil(index / every)``.
-        frame = min(-(-index // every), count - 1)
+        frame = _frame_of(index, every=every, count=count)
         match record.event:
             case Decoded() as event:
                 log.append([frame, "decode", int(event.job), "", list(event.text)])
@@ -424,6 +444,153 @@ def _token_log(records: Sequence[JournalRecord], *, every: int, count: int) -> l
             case _:
                 continue
     return log
+
+
+#: What each row of the context log does to a window; a contract test holds the page to it.
+CONTEXT_OPS: Mapping[str, str] = {
+    "inject": "a segment of foreign tokens appended, with its provenance",
+    "decode": "tokens the job generated, appended to its open output segment",
+    "pad": "filler to the next block boundary, owned by no segment",
+    "splice": "a segment replaced in place by a stub, or removed outright",
+    "stub": "which evicted segment a stub stands for, and where its content went",
+    "fork": "a child's window opening as a copy of its parent's",
+    "perms": "a segment's permission bits, set when it opened or revoked later",
+}
+
+
+def _context_log(records: Sequence[JournalRecord], *, every: int, count: int) -> list[list[Any]]:
+    """Every operation that changed a job's window, tagged with the frame it lands on.
+
+    A history beside the frames, for the reason ``_token_log`` gives. ``replay_context``
+    lists the row shapes. The kernel journals a compartment child's permission
+    revocations before the fork that gives it those segments, so the fork row is moved
+    in front of them and takes their frame.
+    """
+    log: list[list[Any]] = []
+    for index, record in enumerate(records):
+        frame = _frame_of(index, every=every, count=count)
+        match record.event:
+            case Injected() as e:
+                job, seg = int(e.job), int(e.segment)
+                row = [frame, "inject", job, seg, str(e.pipe), int(e.ring), int(e.integrity)]
+                log.append([*row, list(e.text)])
+            case SegmentOpened() as e:
+                log.append([frame, "perms", int(e.job), int(e.segment), e.perms.value])
+            case PermsChanged() as e:
+                log.append([frame, "perms", int(e.job), int(e.segment), e.to_perms.value])
+            case Decoded() as e:
+                log.append([frame, "decode", int(e.job), int(e.segment), list(e.text)])
+            case BlockBoundary() as e if e.padding_tokens:
+                log.append([frame, "pad", int(e.job), e.padding_tokens])
+            case Spliced() as e:
+                job, start, stop = int(e.job), int(e.start_segment), int(e.end_segment)
+                log.append([frame, "splice", job, start, stop, e.tokens_in, e.tokens_out])
+            case SegmentEvicted() as e:
+                log.append([frame, "stub", int(e.job), int(e.stub), int(e.segment), str(e.store)])
+            case Forked() as e:
+                child, at = int(e.child), len(log)
+                while at and log[at - 1][1] == "perms" and log[at - 1][2] == child:
+                    at -= 1
+                log.insert(
+                    at, [log[at][0] if at < len(log) else frame, "fork", child, int(e.parent)]
+                )
+            case _:
+                continue
+    return log
+
+
+def _blank_region(kind: str, segment: int | None, count: int) -> dict[str, Any]:
+    return {
+        "segment": segment,
+        "kind": kind,
+        "pipe": None,
+        "ring": None,
+        "integrity": None,
+        "perms": None,
+        "count": count,
+        "text": [],
+        "stub_of": None,
+        "store": None,
+    }
+
+
+def _region(window: Mapping[str, Any], segment: int) -> dict[str, Any]:
+    for region in window["regions"]:
+        if region["segment"] == segment:
+            return region
+    raise KeyError(f"segment {segment} is not in this window")
+
+
+def replay_context(log: Sequence[Sequence[Any]], *, upto: int | None = None) -> dict[int, Any]:
+    """Rebuild every job's window from the context log, through frame ``upto``.
+
+    The specification of the page's replay, proved against the machine's transcript in
+    the tests. A window is ``{"regions": [...], "tokens": n}``; a region is a segment
+    the kernel owns (an ``inject`` with its provenance, or the job's own ``output``) or
+    one it holds without owning (``pad`` filler, or a ``stub`` for an evicted segment).
+    The journal carries text for the first two and only a size for the last two.
+
+    Rows, after ``[frame, op]``::
+
+        inject  job, segment, pipe, ring, integrity, text
+        decode  job, segment, text
+        pad     job, count
+        splice  job, start_segment, end_segment, tokens_in, tokens_out
+        stub    job, stub_segment, evicted_segment, store
+        fork    child, parent
+        perms   job, segment, perms
+    """
+    windows: dict[int, dict[str, Any]] = {}
+
+    def window(job: int) -> dict[str, Any]:
+        return windows.setdefault(job, {"regions": [], "tokens": 0})
+
+    for row in log:
+        if upto is not None and row[0] > upto:
+            break
+        op, job = row[1], row[2]
+        held = window(job)
+        match op:
+            case "inject":
+                _, _, _, segment, pipe, ring, integrity, text = row
+                region = _blank_region("inject", segment, len(text))
+                region.update(pipe=pipe, ring=ring, integrity=integrity, text=list(text))
+                held["regions"].append(region)
+                held["tokens"] += len(text)
+            case "decode":
+                _, _, _, segment, text = row
+                try:
+                    region = _region(held, segment)
+                except KeyError:
+                    region = _blank_region("output", segment, 0)
+                    held["regions"].append(region)
+                region["text"].extend(text)
+                region["count"] += len(text)
+                held["tokens"] += len(text)
+            case "pad":
+                held["regions"].append(_blank_region("pad", None, row[3]))
+                held["tokens"] += row[3]
+            case "splice":
+                _, _, _, start, stop, tokens_in, _tokens_out = row
+                regions = held["regions"]
+                index = regions.index(_region(held, start))
+                held["tokens"] -= regions[index]["count"]
+                if tokens_in:
+                    regions[index] = _blank_region("stub", stop, tokens_in)
+                    held["tokens"] += tokens_in
+                else:
+                    del regions[index]
+            case "stub":
+                _, _, _, stub, evicted, store = row
+                _region(held, stub).update(stub_of=evicted, store=store)
+            case "fork":
+                windows[job] = copy.deepcopy(window(row[3]))
+            case "perms":
+                _, _, _, segment, perms = row
+                _region(held, segment)["perms"] = perms
+            case _:
+                raise ValueError(f"unknown context operation {op!r}")
+    return windows
 
 
 def _tick_starts(views: Sequence[Mapping[str, Any]]) -> list[int]:
@@ -441,8 +608,33 @@ def _tick_starts(views: Sequence[Mapping[str, Any]]) -> list[int]:
     return starts
 
 
-def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any]:
-    """Fold a journal into a scrubbable, delta-encoded timeline."""
+def _trace_log(rows: Sequence[Mapping[str, Any]], *, every: int, count: int) -> list[list[Any]]:
+    """The machine's trace re-keyed from journal sequence numbers to frames, otherwise
+    carried whole; ``trace.replay_trace`` is what the page mirrors.
+
+    Rows are ``[frame, job, kv_resident, from_word, words, trailing]``.
+    """
+    return [
+        [
+            _frame_of(int(row["seq"]), every=every, count=count),
+            row["job"],
+            row["kv_resident"],
+            row["from_word"],
+            row["words"],
+            row["trailing"],
+        ]
+        for row in rows
+    ]
+
+
+def frames(
+    records: Iterable[JournalRecord],
+    *,
+    every: int = 1,
+    trace: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Fold a journal into a scrubbable, delta-encoded timeline. ``trace`` is the
+    machine's account when one was written; ``None`` means the page has none to offer."""
     records = list(records)
     timeline = fold((r.event for r in records), every=every)
     views = [_encode(f) for f in timeline.frames]
@@ -453,6 +645,8 @@ def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any
             "marks": [],
             "lanes": [],
             "tokens": [],
+            "contexts": [],
+            "trace": None if trace is None else [],
             "ticks": [],
             "count": 0,
         }
@@ -463,6 +657,8 @@ def frames(records: Iterable[JournalRecord], *, every: int = 1) -> dict[str, Any
         "marks": [[index, label] for index, label in timeline.marks],
         "lanes": _lanes(views),
         "tokens": _token_log(records, every=every, count=len(views)),
+        "contexts": _context_log(records, every=every, count=len(views)),
+        "trace": None if trace is None else _trace_log(trace, every=every, count=len(views)),
         "ticks": _tick_starts(views),
         "count": len(views),
     }
@@ -474,6 +670,7 @@ def build_payload(
     records: Sequence[JournalRecord] | None = None,
     findings: Sequence[Finding] = (),
     every: int = 1,
+    trace: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The page's entire input.
 
@@ -490,5 +687,5 @@ def build_payload(
         "kinds": dict(MARKED_KINDS),
     }
     if records is not None:
-        payload["frames"] = frames(records, every=every)
+        payload["frames"] = frames(records, every=every, trace=trace)
     return payload

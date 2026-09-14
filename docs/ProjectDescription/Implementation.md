@@ -21,7 +21,12 @@ maintained in the type system rather than in comments.
 | Block structure, alignment, padding | **Simulated but faithful** |
 | Control-token unforgeability | **Structural** -- a `CONTROL` token cannot be decoded unless the kernel enables it |
 | Eviction, stubs, page faults, store round trip | **Real mechanism** |
-| **Attention mass** | **Synthetic** -- the scripted backend cannot measure; the kernel resolves hints |
+| **Attention mass** | **Synthetic** -- the scripted backend cannot measure; the kernel resolves hints for paging, and demotes integrity on provenance alone unless a hint is a script's declared stipulation |
+| The seat's tokenisation | **Stand-in** -- whitespace, one word per decode; counts and boundaries only. The llama backend tokenises for real |
+| The seat's attention hint | **Synthetic** -- a guess about the job's own output; paging uses it, integrity does not (AM §11.4) |
+| Syscall ABI, parser, transcript rebuild, `MALFORMED` | **Real** -- one declaration renders the prose, the pattern and the grammar (AM §11) |
+| Sink pipes and `drain` | **Real** -- the outbound mirror of `deliver`, journalled as `pipe.drained` (core §4.5) |
+| Provenance of content | **Real** -- each write in a pipe carries its writer's integrity; readers, vector payloads and world objects receive the worse of that and the pipe's ring (MP §4) |
 
 Nothing about eviction regret, θ-parameter sensitivity, or taint-creep rates can be
 concluded from any run of this code. The mechanisms are validated; the policies are
@@ -39,7 +44,7 @@ src/zeos/
 │   ├── ids.py               identifiers + cross-cutting enums (leaf: imports nothing)
 │   ├── serde.py             structural round-trip, hard failure on unserialisable
 │   ├── clock.py             two time bases, both injected
-│   ├── events.py            the 47-event journal alphabet
+│   ├── events.py            the 80-event journal alphabet
 │   ├── pcb.py               Job -- descriptor + transcript + metadata
 │   ├── scheduler.py         ready set, running job, suspension stack, inheritance
 │   ├── pipes.py             bounded buffers, blocking, select, backpressure
@@ -54,7 +59,9 @@ src/zeos/
 │   └── kernel.py            the state machine -- tick(), ~1400 lines
 ├── machine/
 │   ├── base.py              THE BACKEND SWAP POINT -- five ops + serving contract
-│   └── scripted.py          scripted streams, blocks, synthetic attention
+│   ├── scripted.py          scripted streams, blocks, synthetic attention
+│   ├── abi.py               the syscall ABI a model speaks, declared once as data   [AM §11]
+│   └── seat.py              the seat: one word per decode, parser, transcript rebuild [AM §11]
 ├── descriptor/
 │   ├── schema.py            frontmatter → Descriptor, strict parsing
 │   ├── loader.py            markdown + YAML, case directories

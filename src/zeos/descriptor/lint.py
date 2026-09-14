@@ -28,8 +28,10 @@ with on-demand maps, stub budgets, watermark sanity, working-set fit).
 from __future__ import annotations
 
 import enum
+import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from zeos.core.allocator import ReleasePolicy
 from zeos.core.embodiment import PlatformProfile, unsatisfiable
@@ -47,6 +49,9 @@ from zeos.core.principals import (
 from zeos.core.resources import ResourceSpec, lock_order_violations
 from zeos.core.vectors import VectorSpec
 from zeos.descriptor.schema import Descriptor
+from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.base import OpKind
+from zeos.machine.scripted import Script
 from zeos.nli.compiler import Phrasebook, parse_phrasings
 
 __all__ = [
@@ -119,16 +124,19 @@ def lint(
     descriptors: Mapping[DescriptorName, Descriptor],
     *,
     pipes: Sequence[PipeSpec] = (),
+    scripts: Mapping[str, Script] = MappingProxyType({}),
     vectors: Sequence[VectorSpec] = (),
     resources: Sequence[ResourceSpec] = (),
     platforms: Sequence[PlatformProfile] = (),
     principals: PrincipalTable | None = None,
     gates: GateTable | None = None,
     options: LintOptions | None = None,
+    abi: SyscallABI = DEFAULT,
 ) -> tuple[Finding, ...]:
     opts = options or LintOptions()
     findings: list[Finding] = []
     declared_pipes = {p.name for p in pipes}
+    sinks = {p.name for p in pipes if p.sink}
 
     rings = {p.name: p.ring for p in pipes}
 
@@ -136,16 +144,20 @@ def lint(
         d = descriptors[name]
         findings.extend(_check_masking(d, opts))
         findings.extend(_check_children(d, descriptors))
+        findings.extend(_check_script_spawns(d, scripts.get(str(name))))
         findings.extend(_check_pipes(d, declared_pipes))
+        findings.extend(_check_sink_read(d, sinks))
         findings.extend(_check_fault_handler(d, descriptors))
         findings.extend(_check_completion(d, descriptors))
         findings.extend(_check_confused_deputy(d, rings, descriptors))
+        findings.extend(_check_write_up(d, rings))
         findings.extend(_check_endorser_width(d, opts))
         findings.extend(_check_context(d))
         findings.extend(_check_unimplemented_keys(d))
         findings.extend(_check_resources(d, {r.name for r in resources}))
         findings.extend(_check_embodiment(d, platforms))
         findings.extend(_check_addressability(d, principals))
+        findings.extend(_check_body_commands(d, abi))
 
     findings.extend(_check_vectors(vectors, descriptors, declared_pipes, opts))
     findings.extend(_check_write_conflicts(descriptors))
@@ -205,6 +217,37 @@ def _check_children(
     ]
 
 
+def _check_script_spawns(d: Descriptor, script: Script | None) -> list[Finding]:
+    """A script's spawn targets are written by the case author, so the refusal is decidable.
+
+    The kernel refuses a spawn outside ``children:`` or a declared compartment as a
+    capability fault mid-run, which points nowhere near the file that asked for it --
+    the same argument ``unbound-body-pipe`` makes for a pipe a descriptor does not bind.
+    """
+    if script is None:
+        return []
+    allowed = {str(c) for c in d.children}
+    allowed |= {c.name for c in d.compartments}
+    allowed |= {str(c.descriptor) for c in d.compartments}
+    targets = dict.fromkeys(
+        str(step.request.text) for step in script.steps if step.request.op is OpKind.SPAWN
+    )
+    return [
+        Finding(
+            rule="undeclared-spawn",
+            severity=Severity.ERROR,
+            detail=(
+                f"script spawns {target!r}, which is neither in this descriptor's "
+                "children: nor one of its compartments; the kernel will refuse it "
+                "as a capability fault"
+            ),
+            descriptor=d.name,
+        )
+        for target in targets
+        if target not in allowed
+    ]
+
+
 def _check_fault_handler(
     d: Descriptor, descriptors: Mapping[DescriptorName, Descriptor]
 ) -> list[Finding]:
@@ -251,6 +294,71 @@ def _check_pipes(d: Descriptor, declared: Container[str]) -> list[Finding]:
         for pipe in d.pipes.all_names()
         if pipe not in declared
     ]
+
+
+def _check_sink_read(d: Descriptor, sinks: Container[str]) -> list[Finding]:
+    stdin = d.pipes.stdin
+    if stdin is None or stdin not in sinks:
+        return []
+    return [
+        Finding(
+            rule="sink-is-read",
+            severity=Severity.ERROR,
+            detail=(
+                f"binds sink {stdin!r} as stdin, but a sink is drained by the driver for the "
+                "outside world; a job reading it would race the drain"
+            ),
+            descriptor=d.name,
+        )
+    ]
+
+
+#: A backticked span in a body. Only those ending in the ABI's terminator are read as
+#: commands, so an object name or a pipe name in backticks is never mistaken for one.
+_BACKTICKED = re.compile(r"`([^`\n]+)`")
+
+
+def _check_body_commands(d: Descriptor, abi: SyscallABI) -> list[Finding]:
+    """The body is the one copy of the vocabulary written by hand.
+
+    The prompt for the API seat, the pattern its reply is searched with and the grammar
+    the llama seat samples under are all rendered from the ABI; the prose a case author
+    writes is not. A command the body names with a verb the ABI does not declare, or a
+    pipe the descriptor does not bind, teaches the model a word it can never use -- and
+    the failure at run time points nowhere near the body.
+    """
+    findings: list[Finding] = []
+    for span in _BACKTICKED.findall(d.body):
+        if not span.rstrip().endswith(abi.terminator):
+            continue
+        for command in span.split(abi.terminator):
+            words = command.split()
+            if not words:
+                continue
+            shown = f"`{' '.join(words)}{abi.terminator}`"
+            verb = abi.verb(words[0])
+            if verb is None:
+                findings.append(
+                    Finding(
+                        rule="unknown-body-verb",
+                        severity=Severity.ERROR,
+                        detail=f"body names {shown} but the ABI declares no verb {words[0]!r}",
+                        descriptor=d.name,
+                    )
+                )
+            elif verb.pipe and (len(words) < 2 or d.pipes.resolve(words[1]) is None):
+                named = f"pipe {words[1]!r}" if len(words) > 1 else "no pipe"
+                findings.append(
+                    Finding(
+                        rule="unbound-body-pipe",
+                        severity=Severity.ERROR,
+                        detail=(
+                            f"body names {shown} with {named}, which this descriptor does not bind"
+                        ),
+                        descriptor=d.name,
+                    )
+                )
+    return findings
 
 
 def _check_confused_deputy(
@@ -300,6 +408,29 @@ def _check_confused_deputy(
             descriptor=d.name,
         )
     ]
+
+
+def _check_write_up(d: Descriptor, rings: Mapping[PipeName, Ring]) -> list[Finding]:
+    """A capability whose floor is dirtier than the ring of the pipe it writes, with no
+    schema: the kernel lets such a write land and carries the writer's integrity to the
+    reader (MP §6), so the pipe's ring promises less than it reads. Worth knowing."""
+    findings: list[Finding] = []
+    for c in d.capabilities:
+        ring = rings.get(c.pipe, Ring.TRUSTED)
+        if c.schema is None and int(c.min_integrity) > int(ring):
+            findings.append(
+                Finding(
+                    rule="write-up-without-schema",
+                    severity=Severity.WARNING,
+                    detail=(
+                        f"capability on {str(c.pipe)!r} admits a writer at integrity "
+                        f"{int(c.min_integrity)} to a ring-{int(ring)} pipe with no schema; "
+                        "readers receive such writes at the writer's integrity, not the pipe's"
+                    ),
+                    descriptor=d.name,
+                )
+            )
+    return findings
 
 
 def _check_endorser_width(d: Descriptor, opts: LintOptions) -> list[Finding]:
@@ -828,13 +959,14 @@ def _check_write_conflicts(
             if left.priority != right.priority:
                 continue
             if left.writes.intersects(right.writes):
+                shared = ", ".join(sorted(left.writes.patterns & right.writes.patterns))
                 findings.append(
                     Finding(
                         rule="concurrent-write",
                         severity=Severity.WARNING,
                         detail=(
                             f"{left_name!r} and {right_name!r} both write "
-                            f"[{right.writes.render()}] at priority {left.priority}; "
+                            f"[{shared or right.writes.render()}] at priority {left.priority}; "
                             "at equal priority the interleaving is unspecified"
                         ),
                     )

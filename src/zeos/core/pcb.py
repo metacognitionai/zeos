@@ -82,6 +82,8 @@ class Job:
     #: Clock at which the job was suspended, for the "suspended 94s" line and for
     #: computing which writes landed while it was gone.
     suspended_at: Clock | None = None
+    #: Clock at which the job blocked, the baseline for what moved while it waited.
+    blocked_at: Clock | None = None
     preempt_count: int = 0
 
     observed_reads: ObjectSet = field(default_factory=ObjectSet)
@@ -90,7 +92,7 @@ class Job:
     #: A pipe operation the job started but could not complete, retried when it
     #: wakes. Without this a backpressured write would have to be either dropped
     #: (data loss) or partially applied (torn payload) -- both worse than parking it.
-    pending_write: tuple[PipeName, tuple[object, ...]] | None = None
+    pending_write: tuple[PipeName, tuple[object, ...], PipeName | None] | None = None
     #: A blocking READ the job is parked on, completed when it wakes. It has to be
     #: its own field rather than being recovered from ``blocked_on`` /
     #: ``blocked_reason``, because ``Scheduler.wake`` clears both on the way out of
@@ -122,6 +124,8 @@ class Job:
     #: Source-pipe payload taken when this job's vector fired, injected at `_start_job`
     #: so it lands after the body rather than ahead of it.
     vector_payload: tuple[Token, ...] = ()
+    #: How clean the write that fired the vector was; the payload is injected at that.
+    vector_payload_integrity: Integrity | None = None
 
     # -- Protected Mode ------------------------------------------------------
 
@@ -145,6 +149,9 @@ class Job:
     #: batched here rather than per token because that is where the specs put it --
     #: mask churn, watermark demotion, and eviction all land at boundaries.
     last_block: int = -1
+    #: A step since the last block boundary decoded tokens with neither measured
+    #: attention nor a declared hint, so this block demotes on provenance, not a guess.
+    attention_guessed: bool = False
 
     @property
     def name(self) -> DescriptorName:

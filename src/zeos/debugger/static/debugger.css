@@ -251,6 +251,20 @@ body.resizing { user-select: none; cursor: col-resize; }
 .scroller { overflow: auto; flex: 1; padding: 14px; }
 .pane + .pane { border-top: 1px solid var(--line); }
 
+.pane-head .fold {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font: 11px ui-monospace, monospace;
+  padding: 0;
+  width: 12px;
+  flex: none;
+}
+.pane-head .fold:hover { color: var(--accent); }
+.pane.collapsed > :not(.pane-head) { display: none; }
+.pane.collapsed .pane-head { border-bottom: none; }
+
 /* --- the diagram ---------------------------------------------------------- */
 
 #svg { display: block; }
@@ -521,6 +535,111 @@ tr.faulted td { background: color-mix(in srgb, var(--faulted) 12%, transparent);
 }
 /* The movements this frame is standing on, so scrubbing shows what just happened. */
 .move.now { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+
+/* --- context ----------------------------------------------------------------- */
+
+#context { max-height: 460px; overflow-y: auto; }
+#context-job {
+  flex: none;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+  padding: 1px 4px;
+  max-width: 150px;
+}
+.context-meta {
+  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 10.5px ui-monospace, monospace;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.region { padding: 4px 12px 6px; border-bottom: 1px solid var(--line); }
+.region:last-child { border-bottom: none; }
+.region-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 10px ui-monospace, monospace;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+}
+.region-head .seg { color: var(--ink); font-weight: 600; flex: none; }
+.region-head .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.region-head .off { margin-left: auto; flex: none; }
+.region-head::before { content: "\25BE"; flex: none; width: 10px; }
+.region.collapsed .region-head::before { content: "\25B8"; }
+.region.collapsed .toks { display: none; }
+.region .toks { margin-top: 3px; }
+
+.region.ring0 .tok {
+  background: color-mix(in srgb, var(--ring0) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ring0) 30%, transparent);
+}
+.region.ring1 .tok {
+  background: color-mix(in srgb, var(--ring1) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ring1) 30%, transparent);
+}
+.region.ring2 .tok {
+  background: color-mix(in srgb, var(--ring2) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ring2) 30%, transparent);
+}
+.region.ring3 .tok {
+  background: color-mix(in srgb, var(--ring3) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ring3) 30%, transparent);
+}
+.region.output .tok {
+  background: color-mix(in srgb, var(--running) 12%, transparent);
+  border-color: color-mix(in srgb, var(--running) 30%, transparent);
+}
+.region .told { color: var(--dim); font-size: 10.5px; margin-top: 3px; }
+.region.stub .told { color: var(--ring0); }
+.region.now { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.region.unreadable { opacity: 0.45; }
+
+#context-raw {
+  flex: none;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  padding: 1px 7px;
+}
+#context-raw[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.raw-stream { display: flex; flex-wrap: wrap; gap: 3px; padding: 6px 12px 10px; }
+.piece {
+  font: 10.5px ui-monospace, monospace;
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--dim) 40%, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+  white-space: pre;
+}
+.piece.framing {
+  color: var(--ring0);
+  border-color: color-mix(in srgb, var(--ring0) 55%, transparent);
+  border-style: dashed;
+}
+.piece.now { background: color-mix(in srgb, var(--running) 18%, transparent); border-color: var(--running); }
+.kv-edge {
+  flex-basis: 100%;
+  font: 10px ui-monospace, monospace;
+  color: var(--blocked);
+  border-top: 1px dashed var(--blocked);
+  padding-top: 2px;
+}
+.kv-edge.cached { color: var(--dim); border-color: var(--line); }
 
 /* --- the descriptor sheet -------------------------------------------------- */
 

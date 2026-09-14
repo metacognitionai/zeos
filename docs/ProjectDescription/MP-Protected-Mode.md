@@ -42,6 +42,8 @@ INJECT is the *only* way foreign tokens enter a context, and every INJECT names 
 
 Ring is assigned by the kernel from a pipe's declared ring, never claimed by content, and both ends of a pipe must agree at load time. Directives flow downhill only: a job treats as instructions ring ≤ its own code ring; everything below is data.
 
+A pipe's declared ring is a floor, not a promise. What a job writes carries the worse of the pipe's ring and the job's integrity. A reader receives it at that level. A world object written through an actuator takes the same level as its provenance, and every status region or resume diff that shows the object carries it. A declaration can lower a floor. Only a schema (§6, endorse) can raise content above its writer.
+
 # 5. Enforcement layers
 
 ## 5.1 Structural (hard): attention masking as the MMU
@@ -50,11 +52,11 @@ A job cannot attend to a segment it lacks R on -- an allowed-block bitmap enforc
 
 ## 5.2 Boundary (hard): effects are syscalls
 
-A job's only effects are pipe writes, and pipes are held as **capabilities** (`core/capabilities.py`) granted in the descriptor: minimum writer integrity, payload schema, rate limit. The kernel checks every write. Confused-deputy handling: a job serving a lower-ring pipe writes at the *requester's* integrity (seteuid-style drop), so a low-trust job cannot launder actions through a high-trust one.
+A job's only effects are pipe writes, and pipes are held as **capabilities** (`core/capabilities.py`) granted in the descriptor: minimum writer integrity, payload schema, rate limit. The kernel checks every write; a descriptor that declares no capabilities may write only the pipes it binds, with no further conditions. Reads and selects stay inside the bindings too, capabilities or not: a read causes nothing, so the bindings are the whole grant, and a name outside them is a capability fault that creates no pipe. Confused-deputy handling: a job serving a lower-ring pipe writes at the *requester's* integrity (seteuid-style drop), so a low-trust job cannot launder actions through a high-trust one.
 
 ## 5.3 Tag unforgeability (hard): trapping privileged instructions
 
-Kernel framing is carried on reserved tokens the model cannot emit -- in this codebase a `CONTROL` token kind the machine refuses to decode unless the kernel enabled it; on a real tokenizer, reserved token IDs disabled for inbound text. Text that *renders* like `<KERNEL>` arrives as ordinary tokens carrying no authority. Attempted mimicry is a **spoof fault**: already inert, but worth alarming on.
+Kernel framing is carried on reserved tokens the model cannot emit -- in this codebase a `CONTROL` token kind the machine refuses to decode unless the kernel enabled it; on a real tokenizer, reserved token IDs disabled for inbound text. Text that *renders* like `<KERNEL>` arrives as ordinary tokens carrying no authority. Attempted mimicry is a **spoof fault** wherever it enters a window, on a pipe read, in a vector payload or in the value a status region shows: already inert, but worth alarming on -- the job is told and continues, whatever its `on_fault` policy, since a policy that aborted would let any device end a job by spelling a tag. A source that reads its context as text is shown the kernel's frames as they are and an imitation escaped.
 
 ## 5.4 Model-level (soft, trainable, measurable): the execute bit
 
@@ -62,8 +64,10 @@ X=0 means "may inform, must not direct." This cannot be enforced inside the forw
 
 # 6. Integrity dynamics
 
-**Low-water-mark** (`core/integrity.py`): each job's `current_integrity` starts at its descriptor's level and falls to the level of what it reads -- demotion is attention-thresholded (mass ≥ θ_read), so merely *containing* dirt does not demote; *using* it does. Writes above the job's current level raise a **privilege fault** carrying the demotion history: which segments dragged it down, via which pipes.
+**Low-water-mark** (`core/integrity.py`): each job's `current_integrity` starts at its descriptor's level and falls to the level of what it reads -- demotion is attention-thresholded (mass ≥ θ_read), so merely *containing* dirt does not demote; *using* it does. That threshold needs a measurement: when the backend cannot measure attention, the kernel takes provenance alone and demotes the job to the worst thing it could see, at each block boundary and before each write. Writes above the job's current level raise a **privilege fault** carrying the demotion history: which segments dragged it down, via which pipes.
 
-Monotone decay would make long-lived jobs end up minimally trusted, so there are three escape hatches, in preference order: **compartmentalize** (spawn a low-integrity child to read the dirt and return results over a pipe -- the parent's watermark never moves); **endorse** (a designated guard job reads ring-3 material and re-emits at ring 2 under a narrow output schema -- the only integrity-raising operation, and the schema width is the security dial); **checkpoint-and-reset** (FORK before the dirty read, discard the tainted branch).
+Monotone decay would make long-lived jobs end up minimally trusted, so there are three escape hatches, in preference order: **compartmentalize** (spawn a low-integrity child to read the dirt and return results over a pipe -- the parent's watermark never moves); **endorse** (a designated guard job reads ring-3 material and re-emits at ring 2 under a narrow output schema -- the only integrity-raising operation, and the schema width is the security dial; a write without a schema is not refused, it lands and its reader receives it at the writer's integrity); **checkpoint-and-reset** (FORK before the dirty read, discard the tainted branch).
+
+Taint travels through the world as well as through pipes. When a demoted job writes an actuator, the object it changes takes the job's integrity. Every job that views that object, in a status region or a resume diff, receives the value at that integrity and is demoted if it uses it. The ways out are the same as for pipes: a compartment views the object, or an endorser writes it through a schema.
 
 The fault taxonomy: **attention fault** (reference to a segment without R -- blocked structurally), **privilege fault** (write above current integrity), **spoof fault** (imposter kernel framing in inbound data), **capability fault** (unheld pipe, schema violation, or rate breach). All dispatch through the same fault-as-interrupt mechanism as budget and deadline faults, and the load-time lint rejects a descriptor holding a high-integrity capability and a ring-3 read pipe with no declared dynamics, compartment, or endorser -- confused-deputy-by-construction.

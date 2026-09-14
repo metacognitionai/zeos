@@ -28,7 +28,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from zeos.core.ids import Integrity, Residency, Ring, SegmentId, StoreId
+from zeos.core.ids import Integrity, JobId, Residency, Ring, SegmentId, StoreId
 from zeos.core.segments import Provenance, SegmentRecord
 from zeos.machine.base import Token
 
@@ -137,6 +137,10 @@ class EvictionRecord:
     evicted_at_block: int
     freed_tokens: int
     stub_tokens: int
+    #: The job whose context this span was evicted from. A NEED or an explicit fault
+    #: is answered only from the asking job's own evictions, so one job's archived
+    #: content can never be paged into another's.
+    owner: JobId = JobId(0)
     residency: Residency = Residency.STUBBED
     refaults: int = 0
     #: Set once the span has been paged back in and is resident again, so that

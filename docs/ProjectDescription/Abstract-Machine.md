@@ -337,13 +337,53 @@ A decode step may carry one request, which is how a job asks the kernel for some
 
 ```
 MachineRequest = (op, pipe, pipes, payload, segment, resource, text, read_pipe)
-OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RELEASE | SPAWN | EXIT
+OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RELEASE | SPAWN | EXIT | MALFORMED
 ```
 
 **MUST:** at most one request per decode step.
 
 **`WRITE_READ`** is one request that the kernel performs as two operations -- `pipe` is written, then `read_pipe` is read -- within a single `tick`, so no preemption check falls between them. It exists because the universal shape of a turn is *hand over, then sleep*, and splitting that across two ticks lets the peer the write just woke take the machine one command before the job would have yielded it anyway. Backends opt in by emitting it; one that keeps emitting separate `WRITE` and `READ` behaves exactly as before. The read half is performed only if the write half completed.
 
+**`MALFORMED`** is how a machine reports a command it closed but could not shape into a request -- a verb its ABI does not declare, or one missing the pipe it takes -- with the words in `text`. The kernel raises a `malformed_request` fault from it, so the job is told and the journal says so; a machine that dropped such a command would leave the kernel unable to tell it from a job thinking out loud. A backend that constrains sampling to its ABI never emits it.
+
 **There is deliberately no YIELD.** From the interface's own comment: *jobs cannot volunteer scheduling decisions.* Scheduling is the kernel's, entirely. A job blocks because it read an empty pipe, waited on a resource, or faulted, and never because it decided to be polite. This is the whole difference between ZEOS and an agent loop, and it is enforced by the absence of a token in an enum, which is the cheapest possible place to enforce it.
 
 **POLICY:** how a backend extracts a request from generated text. **M0** carries it structurally in the script. **M1** will need grammar-constrained decoding -- the fourth of the four asks ZEOS makes of a serving stack. **MUST:** the request is a *request*. Every one of these is then checked by the kernel against capabilities, rings, integrity and ceilings. A backend that produces a `WRITE` has not performed a write.
+
+# 11. The seat and the syscall ABI
+
+§10 says a decode step may carry a request. This section says where a request comes from when the machine is a model rather than a script: the small command language a model speaks, and the machinery that turns what it says into requests. Both are in the tree at `machine/abi.py` and `machine/seat.py`.
+
+## 11.1 The command language is declared once, as data
+
+A model asks the kernel for things by emitting text such as `write stdout hello;`. The vocabulary is a `SyscallABI`: a tuple of verbs, each naming the `OpKind` it asks for and whether it takes a pipe and a payload; the pipe aliases a command may use, which the kernel resolves against the descriptor's `pipes:` bindings; the terminator that closes a command; and a cap on payload length. The cap is short in the default, sixteen words, because a roomy payload lets one command carry a whole plan and a plan is not a syscall.
+
+Verbs divide into two kinds. A *line* asks the kernel for nothing (`say`, thinking out loud); a job may issue any number before a *call*, which asks for something (`write`, `read`, `exit`) and so ends the job's round. There is no verb for yielding, for the reason §10 gives.
+
+The declaration is the single source for everything a backend derives from it: the prose a model is told (`prose()`), the pattern a free-text reply is searched with (`pattern()`), and the grammar a sampler is constrained by. `DEFAULT` is an example vocabulary and what a seat speaks unless told otherwise; a case declares its own where its jobs speak differently, as the space-invaders case does with a three-verb ABI whose payload is bounded by a schema rather than a count.
+
+## 11.2 The seat is the machine half every model shares
+
+A backend that runs a real model has three jobs the kernel does not do for it: chop what the model says into one token per decode; notice the token that completes a command and turn the command into a request; and hand the model its own transcript afresh each time it is asked to speak, because the kernel rewrites status regions and evicts spans in place, so a copy kept alongside drifts.
+
+`SyscallSeat` is that machinery with no model in it. `CommandSeat` adds a `CommandSource` -- a tape, an API, a local process -- and is a whole backend: the same case runs under any of them, and a source is told, per turn, only the descriptor, the transcript as text, how many commands it has issued and which was last. A backend that samples token by token, as local weights do, inherits `SyscallSeat` and does its own decoding.
+
+What the seat shows a text-only model is decided here, not left to each source. The kernel's frames (§9; MP §5.3) are shown as they are. Ordinary text that spells a frame tag is shown escaped, so the frame and an imitation of it never look alike. Block padding is left out, since it is the machine's and says nothing. Everything a source says back is decoded as `NORMAL`, so a model cannot emit a frame however it spells one (AM-I4).
+
+## 11.3 Three ways to keep a model inside the ABI
+
+A backend keeps a model inside the ABI in one of three ways, and they are not equal.
+
+| how | who | guarantee |
+| --- | --- | --- |
+| a grammar rendered from the ABI, constraining the sampler | the llama backend (`coop-count`) | the model can emit nothing but a command naming a pipe it binds |
+| a schema the reply must fit | the space-invaders API machine | the shape is fixed; the words inside it are checked by the kernel like any request |
+| prose plus a pattern | the API seats (`claude`, `claude-code`) | none; the command is whatever the pattern finds in the reply, or the whole reply if it finds nothing |
+
+Only the first two rule out a command outside the ABI. The third is where `MALFORMED` (§10) comes from: a closed command with an undeclared verb, or a pipe verb without its pipe, becomes a `MALFORMED` request carrying the words, the kernel raises a `malformed_request` fault, and the descriptor's `on_fault` decides what follows -- a notice and another try, or the end of the job. A grammar-constrained backend never emits it.
+
+## 11.4 What is real here and what stands in
+
+- The seat's tokenisation is whitespace, one word per decode. It stands in for a tokenizer and measures counts and boundaries, nothing else; the llama backend tokenises for real and gives its own account of each window beside the journal.
+- The seat's attention hint is a guess about the job's own output. No source behind a seat can measure attention, so the kernel treats the hint as a guess: paging uses it, and integrity is demoted on provenance alone (MP §6). A script step's declared `attend:` is the only hint the integrity rule takes at its word.
+- The transcript rebuild, the parser and the request it produces are real mechanism, and every request is a request: the kernel checks it against bindings, capabilities, rings, integrity and ceilings as §10 says, whichever seat produced it.

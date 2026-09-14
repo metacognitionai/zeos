@@ -51,7 +51,11 @@ B_SCRIPT = [{"emit": "answering"}, {"exit": True}]
 
 
 def _build(*, pin_b: bool) -> tuple[Kernel, list[Event]]:
-    a: dict[str, Any] = {"name": "peer-a", "priority": 50, "pipes": {"stdin": str(CMD)}}
+    a: dict[str, Any] = {
+        "name": "peer-a",
+        "priority": 50,
+        "pipes": {"stdin": str(CMD), "stdout": str(A2B)},
+    }
     b: dict[str, Any] = {"name": "peer-b", "priority": 50, "pipes": {"stdin": str(A2B)}}
     if pin_b:
         b["pinned"] = True

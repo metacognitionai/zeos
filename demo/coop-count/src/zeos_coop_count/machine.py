@@ -25,11 +25,15 @@ from zeos.machine.base import (
     MachineRequest,
     MaskViolation,
     OpKind,
+    RawWindow,
+    RawWord,
     SpliceResult,
     Token,
 )
-from zeos_coop_count.seat import SyscallSeat
-from zeos_coop_count.syscall import SyscallParser, build_grammar
+from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.seat import SyscallParser, SyscallSeat
+
+from zeos_coop_count.grammar import build_grammar
 
 __all__ = ["LlamaModel", "LlamaMachine", "PAD_TOKEN", "DEFAULT_BLOCK_SIZE"]
 
@@ -62,6 +66,7 @@ class LlamaModel:
         self.model = model
         self.vocab = llama_cpp.llama_model_get_vocab(model)
         self.n_vocab = llama_cpp.llama_vocab_n_tokens(self.vocab)
+        self._pieces: dict[int, str] = {}
 
     def tokenize(self, text: str, *, add_bos: bool, parse_special: bool = False) -> list[int]:
         """Turn text into token ids, treating text that spells a special token as plain text."""
@@ -74,11 +79,16 @@ class LlamaModel:
         return list(out[:n])
 
     def piece(self, token: int) -> str:
+        cached = self._pieces.get(token)
+        if cached is not None:
+            return cached
         buf = ctypes.create_string_buffer(64)
         n = llama_cpp.llama_token_to_piece(self.vocab, token, buf, 64, 0, True)
         if n < 0:
             raise RuntimeError(f"detokenization failed for id {token}")
-        return bytes(buf[:n]).decode("utf-8", errors="replace")
+        text = bytes(buf[:n]).decode("utf-8", errors="replace")
+        self._pieces[token] = text
+        return text
 
     def free(self) -> None:
         if getattr(self, "model", None):
@@ -92,17 +102,26 @@ class _Context:
 
     seq: int
     descriptor: str
+    parser: SyscallParser
     #: The kernel-visible token sequence T.
     tokens: list[Token] = field(default_factory=list[Token])
     #: The llama token ids backing T, flat.
     ids: list[int] = field(default_factory=list[int])
     #: ``spans[i]`` is how many llama ids element ``i`` of T occupies.
     spans: list[int] = field(default_factory=list[int])
+    #: ``framing[i]`` is how many of those ids are chat framing, before and after the word.
+    framing: list[tuple[int, int]] = field(default_factory=list[tuple[int, int]])
+
+    def extend(self, tokens: Sequence[Token], ids: Sequence[int], spans: Sequence[int]) -> None:
+        self.tokens.extend(tokens)
+        self.ids.extend(ids)
+        self.spans.extend(spans)
+        self.framing.extend([(0, 0)] * len(spans))
+
     #: How many llama ids have had a forward pass; the rest are flushed on the next decode.
     n_in_kv: int = 0
     mask: frozenset[int] | None = None
     sampler: object | None = None
-    parser: SyscallParser = field(default_factory=SyscallParser)
     grammar: str = ""
     #: Tags for the attention hint, naming what this step most likely attends to.
     tags: tuple[str, ...] = ()
@@ -126,6 +145,7 @@ class LlamaMachine(SyscallSeat):
         self,
         model: LlamaModel,
         *,
+        abi: SyscallABI = DEFAULT,
         descriptors: Mapping[str, Sequence[str]] | None = None,
         valued: Mapping[str, Sequence[str]] | None = None,
         block_size: int = DEFAULT_BLOCK_SIZE,
@@ -139,6 +159,7 @@ class LlamaMachine(SyscallSeat):
         on_arrival: Callable[[JobId, str], None] | None = None,
     ) -> None:
         super().__init__(
+            abi=abi,
             descriptors=descriptors,
             valued=valued,
             on_command=on_command,
@@ -217,6 +238,8 @@ class LlamaMachine(SyscallSeat):
             self._rewind(ctx, at)
         ctx.ids[at:at] = ids
         ctx.spans[index] += len(ids)
+        head, tail = ctx.framing[index]
+        ctx.framing[index] = (head + len(ids), tail) if before else (head, tail + len(ids))
 
     def create_context(self, job: JobId, descriptor: str = "") -> None:
         if job in self._contexts:
@@ -224,8 +247,12 @@ class LlamaMachine(SyscallSeat):
         if not self._free_seqs:
             raise RuntimeError("out of llama sequences; raise n_seq_max")
         seq = self._free_seqs.pop(0)
-        ctx = _Context(seq=seq, descriptor=descriptor, tags=("descriptor",))
-        ctx.grammar = build_grammar(self.aliases(descriptor), valued=self.valued(descriptor))
+        ctx = _Context(
+            seq=seq, descriptor=descriptor, parser=SyscallParser(self.abi), tags=("descriptor",)
+        )
+        ctx.grammar = build_grammar(
+            self.abi, self.aliases(descriptor), valued=self.valued(descriptor)
+        )
         self._build_sampler(ctx)
         self._contexts[job] = ctx
 
@@ -414,9 +441,7 @@ class LlamaMachine(SyscallSeat):
         ctx.spoken = True
 
         before = len(ctx.tokens)
-        ctx.tokens.append(token)
-        ctx.ids.append(tid)
-        ctx.spans.append(1)
+        ctx.extend([token], [tid], [1])
         after = len(ctx.tokens)
 
         request = self.consume(job, ctx.parser, piece)
@@ -437,9 +462,7 @@ class LlamaMachine(SyscallSeat):
         start = len(ctx.tokens)
         first = not ctx.tokens
         new_tokens, new_ids, new_spans = self._encode(tokens, ctx)
-        ctx.tokens.extend(new_tokens)
-        ctx.ids.extend(new_ids)
-        ctx.spans.extend(new_spans)
+        ctx.extend(new_tokens, new_ids, new_spans)
         # An arrival lands mid-flight when the model's turn is open; anything before that
         # is still the prompt being put together.
         if new_tokens and self._chat_template == "chatml":
@@ -472,6 +495,7 @@ class LlamaMachine(SyscallSeat):
         del ctx.tokens[at:]
         del ctx.ids[kv_at:]
         del ctx.spans[at:]
+        del ctx.framing[at:]
         if ctx.turn_index is not None and at <= ctx.turn_index:
             ctx.turn_index = None
             ctx.turn_open = False
@@ -490,6 +514,7 @@ class LlamaMachine(SyscallSeat):
         existing.tokens = list(src.tokens)
         existing.ids = list(src.ids)
         existing.spans = list(src.spans)
+        existing.framing = list(src.framing)
         existing.n_in_kv = src.n_in_kv
         existing.turn_open = src.turn_open
         existing.turn_index = src.turn_index
@@ -512,8 +537,9 @@ class LlamaMachine(SyscallSeat):
         tail_tokens = ctx.tokens[end:]
         tail_ids = ctx.ids[kv_end:]
         tail_spans = ctx.spans[end:]
+        tail_framing = ctx.framing[end:]
 
-        head = _Context(seq=ctx.seq, descriptor=ctx.descriptor)
+        head = _Context(seq=ctx.seq, descriptor=ctx.descriptor, parser=ctx.parser)
         head.ids = ctx.ids[:kv_start]
         new_tokens, new_ids, new_spans = self._encode(tokens, head)
 
@@ -521,6 +547,7 @@ class LlamaMachine(SyscallSeat):
         ctx.tokens[start:] = new_tokens + tail_tokens
         ctx.ids[kv_start:] = new_ids + tail_ids
         ctx.spans[start:] = new_spans + tail_spans
+        ctx.framing[start:] = [(0, 0)] * len(new_spans) + tail_framing
         return SpliceResult(tokens_in=len(new_tokens), invalidated_downstream=downstream)
 
     # -- the serving-stack contract ------------------------------------------
@@ -551,9 +578,7 @@ class LlamaMachine(SyscallSeat):
         if remainder == 0:
             return 0
         padding = self._block_size - remainder
-        ctx.tokens.extend([PAD_TOKEN] * padding)
-        ctx.ids.extend([self._pad_id] * padding)
-        ctx.spans.extend([1] * padding)
+        ctx.extend([PAD_TOKEN] * padding, [self._pad_id] * padding, [1] * padding)
         return padding
 
     def blocks_for_range(self, job: JobId, start: int, end: int) -> frozenset[int]:
@@ -564,6 +589,27 @@ class LlamaMachine(SyscallSeat):
 
     def transcript(self, job: JobId) -> tuple[Token, ...]:
         return tuple(self._ctx_of(job).tokens)
+
+    def raw(self, job: JobId) -> RawWindow:
+        """Each word's pieces and the framing around them; framing after a word is
+        reported ahead of the next, and after the last word as ``trailing``."""
+        ctx = self._ctx_of(job)
+        words: list[RawWord] = []
+        carried: list[str] = []
+        at = 0
+        for span, (head, tail) in zip(ctx.spans, ctx.framing, strict=True):
+            ids = ctx.ids[at : at + span]
+            at += span
+            own = span - head - tail
+            framing = carried + [self._model.piece(t) for t in ids[:head]]
+            words.append(
+                RawWord(
+                    pieces=tuple(self._model.piece(t) for t in ids[head : head + own]),
+                    framing=tuple(framing),
+                )
+            )
+            carried = [self._model.piece(t) for t in ids[head + own :]]
+        return RawWindow(words=tuple(words), kv_resident=ctx.n_in_kv, trailing=tuple(carried))
 
     # -- outside the Protocol -------------------------------------------------
 

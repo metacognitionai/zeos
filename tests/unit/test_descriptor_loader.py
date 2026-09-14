@@ -13,9 +13,12 @@ from pathlib import Path
 import pytest
 
 from zeos.core.ids import DescriptorName, ObjectName, OnComplete, OnFault, Placement
-from zeos.descriptor.lint import LintOptions, Severity, lint
+from zeos.core.pipes import PipeSpec
+from zeos.descriptor.lint import Finding, LintOptions, Severity, lint
 from zeos.descriptor.loader import load_case, split_frontmatter
 from zeos.descriptor.schema import Descriptor, DescriptorError, parse_duration_ns
+from zeos.machine.abi import DEFAULT, SyscallABI, Verb
+from zeos.machine.base import OpKind
 
 SMOKE = Path(__file__).parent.parent / "fixtures" / "smoke"
 
@@ -199,6 +202,86 @@ def test_the_smoke_case_lints_clean() -> None:
     bundle = load_case(SMOKE)
     findings = lint(bundle.descriptors, pipes=bundle.pipes, vectors=bundle.vectors)
     assert findings == (), [f.render() for f in findings]
+
+
+SEAT = Path(__file__).resolve().parents[1] / "fixtures" / "seat"
+
+
+def _speaking(body: str, **frontmatter: object) -> Descriptor:
+    return Descriptor.from_frontmatter(
+        {"name": "x", "priority": 50, "pipes": {"stdout": "ops.report", "tools": "act.a"}}
+        | frontmatter,
+        body=body,
+    )
+
+
+def _lint_body(d: Descriptor, *, abi: SyscallABI = DEFAULT) -> tuple[Finding, ...]:
+    """Lint one descriptor with its pipes declared, so only the body rules can speak."""
+    return lint({d.name: d}, pipes=[PipeSpec(n) for n in d.pipes.all_names()], abi=abi)
+
+
+def test_the_seat_fixture_lints_clean() -> None:
+    bundle = load_case(SEAT)
+    findings = lint(bundle.descriptors, pipes=bundle.pipes)
+    assert findings == (), [f.render() for f in findings]
+
+
+def test_a_body_naming_a_verb_the_abi_lacks_is_rejected() -> None:
+    """The body is the one hand-written copy of the vocabulary; a word the ABI does not
+    declare is one the grammar will never offer and the API seat will never parse."""
+    d = _speaking("Say your number, then `record tools N;` to keep it.")
+    findings = _lint_body(d)
+    assert [f.rule for f in findings] == ["unknown-body-verb"]
+    assert findings[0].severity is Severity.ERROR
+    assert "`record tools N;`" in findings[0].detail and "'record'" in findings[0].detail
+
+
+def test_a_body_naming_a_pipe_the_descriptor_does_not_bind_is_rejected() -> None:
+    d = _speaking("When done, `write peer go;` to wake the other job.")
+    findings = _lint_body(d)
+    assert [f.rule for f in findings] == ["unbound-body-pipe"]
+    assert findings[0].severity is Severity.ERROR
+    assert "'peer'" in findings[0].detail
+
+
+def test_a_pipe_verb_named_without_its_pipe_is_rejected() -> None:
+    d = _speaking("Then `write;` and stop.")
+    assert [f.rule for f in _lint_body(d)] == ["unbound-body-pipe"]
+
+
+def test_placeholders_in_a_payload_are_not_checked() -> None:
+    d = _speaking("`say N;` then `write tools TARGET;` then `write stdout go;` then `exit;`")
+    assert _lint_body(d) == ()
+
+
+def test_an_extra_binding_counts_as_bound() -> None:
+    d = _speaking("`write peer N;` sets the second counter.", pipes={"peer": "count.progress_b"})
+    assert _lint_body(d) == ()
+
+
+def test_prose_with_a_semicolon_is_not_read_as_a_command() -> None:
+    d = _speaking("Count up; then stop. The status line names `count.b` and `stdin` is a pipe.")
+    assert _lint_body(d) == ()
+
+
+def test_every_command_in_a_span_is_checked() -> None:
+    d = _speaking("From 47 the count is `say 48; say 49; shout 50;` and no more.")
+    findings = _lint_body(d)
+    assert [f.rule for f in findings] == ["unknown-body-verb"]
+    assert "'shout'" in findings[0].detail
+
+
+def test_the_body_is_checked_against_the_abi_it_is_given() -> None:
+    custom = SyscallABI(
+        verbs=(Verb("send", OpKind.WRITE, pipe=True, text=True), Verb("done", OpKind.EXIT)),
+        aliases=("out",),
+        terminator="!",
+    )
+    d = _speaking("`send out hello!` then `done!`", pipes={"out": "ops.report"})
+    assert _lint_body(d, abi=custom) == ()
+    assert [f.rule for f in _lint_body(d)] == [], "the default ABI's terminator is not '!'"
+    d = _speaking("`send out hello;` then `done;`", pipes={"out": "ops.report"})
+    assert [f.rule for f in _lint_body(d)] == ["unknown-body-verb", "unknown-body-verb"]
 
 
 def test_unpreemptible_with_a_large_budget_is_rejected() -> None:

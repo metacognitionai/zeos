@@ -1,6 +1,7 @@
 ---
 name: counter-b
 priority: 50
+on_fault: retry
 # Resident and prefilled at boot, but not runnable until counter-a's first `go` lands on
 # `stdin`. Equal-priority jobs are not timesliced, so without this counter-b would first be
 # dispatched *after* counter-a had recorded ten and written its wake token -- waking to a
