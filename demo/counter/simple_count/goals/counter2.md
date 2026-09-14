@@ -1,6 +1,7 @@
 ---
 name: counter2
 priority: 100
+children: [counter2]
 script:
   - emit: "one"
   - emit: "two"
