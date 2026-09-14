@@ -31,6 +31,7 @@ import enum
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from zeos.core.allocator import ReleasePolicy
 from zeos.core.embodiment import PlatformProfile, unsatisfiable
@@ -49,6 +50,8 @@ from zeos.core.resources import ResourceSpec, lock_order_violations
 from zeos.core.vectors import VectorSpec
 from zeos.descriptor.schema import Descriptor
 from zeos.machine.abi import DEFAULT, SyscallABI
+from zeos.machine.base import OpKind
+from zeos.machine.scripted import Script
 from zeos.nli.compiler import Phrasebook, parse_phrasings
 
 __all__ = [
@@ -121,6 +124,7 @@ def lint(
     descriptors: Mapping[DescriptorName, Descriptor],
     *,
     pipes: Sequence[PipeSpec] = (),
+    scripts: Mapping[str, Script] = MappingProxyType({}),
     vectors: Sequence[VectorSpec] = (),
     resources: Sequence[ResourceSpec] = (),
     platforms: Sequence[PlatformProfile] = (),
@@ -140,6 +144,7 @@ def lint(
         d = descriptors[name]
         findings.extend(_check_masking(d, opts))
         findings.extend(_check_children(d, descriptors))
+        findings.extend(_check_script_spawns(d, scripts.get(str(name))))
         findings.extend(_check_pipes(d, declared_pipes))
         findings.extend(_check_sink_read(d, sinks))
         findings.extend(_check_fault_handler(d, descriptors))
@@ -209,6 +214,37 @@ def _check_children(
         )
         for child in d.children
         if child not in descriptors
+    ]
+
+
+def _check_script_spawns(d: Descriptor, script: Script | None) -> list[Finding]:
+    """A script's spawn targets are written by the case author, so the refusal is decidable.
+
+    The kernel refuses a spawn outside ``children:`` or a declared compartment as a
+    capability fault mid-run, which points nowhere near the file that asked for it --
+    the same argument ``unbound-body-pipe`` makes for a pipe a descriptor does not bind.
+    """
+    if script is None:
+        return []
+    allowed = {str(c) for c in d.children}
+    allowed |= {c.name for c in d.compartments}
+    allowed |= {str(c.descriptor) for c in d.compartments}
+    targets = dict.fromkeys(
+        str(step.request.text) for step in script.steps if step.request.op is OpKind.SPAWN
+    )
+    return [
+        Finding(
+            rule="undeclared-spawn",
+            severity=Severity.ERROR,
+            detail=(
+                f"script spawns {target!r}, which is neither in this descriptor's "
+                "children: nor one of its compartments; the kernel will refuse it "
+                "as a capability fault"
+            ),
+            descriptor=d.name,
+        )
+        for target in targets
+        if target not in allowed
     ]
 
 

@@ -53,6 +53,7 @@ def _cmd_lint(args: argparse.Namespace) -> int:
     findings = lint(
         bundle.descriptors,
         pipes=bundle.pipes,
+        scripts=bundle.scripts,
         vectors=bundle.vectors,
         resources=bundle.resources,
         platforms=bundle.platforms,
@@ -77,6 +78,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     findings = lint(
         bundle.descriptors,
         pipes=bundle.pipes,
+        scripts=bundle.scripts,
         vectors=bundle.vectors,
         resources=bundle.resources,
         platforms=bundle.platforms,
@@ -199,6 +201,7 @@ def _cmd_debug(args: argparse.Namespace) -> int:
         findings = lint(
             bundle.descriptors,
             pipes=bundle.pipes,
+            scripts=bundle.scripts,
             vectors=bundle.vectors,
             resources=bundle.resources,
             platforms=bundle.platforms,
