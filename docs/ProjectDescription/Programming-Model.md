@@ -4,7 +4,7 @@
 
 # 1. Thesis
 
-ZEOS is presented elsewhere as a runtime: a kernel that schedules, protects, and pages LLM jobs. But the deeper claim is that it is a **programming paradigm**. The behaviours of a complex real-time system are decomposed into tasks, each described in a single file, each written as if it were the only thing the system does. The kernel -- not the programmer, and not the model -- composes them into coherent whole-system behaviour.
+ZEOS is presented as a runtime: a kernel that schedules, protects, and pages LLM jobs. But the deeper claim is that it is a **programming paradigm**. The behaviours of a complex real-time system are decomposed into tasks, each described in a single file, each written as if it were the only thing the system does. The kernel -- not the programmer, and not the model -- composes them into coherent whole-system behaviour.
 
 The slogan:
 
@@ -57,6 +57,8 @@ pipes:
 capabilities:
   - pipe: actuators.arm
     min_integrity: 2            # a tainted job cannot actuate
+  - pipe: actuators.base
+    min_integrity: 2
 on_fault: escalate
 ---
 
@@ -90,6 +92,7 @@ reads:
   - house.smoke_zone
 writes:
   - house.stove
+  - robot.position
 pipes:
   stdin: sensors.smoke          # the event payload arrives here
   tools: actuators.arm
@@ -97,6 +100,10 @@ capabilities:
   - pipe: actuators.arm
     min_integrity: 2
   - pipe: alerts.household      # may wake the humans
+    min_integrity: 2
+  - pipe: actuators.stove       # may cut the stove
+    min_integrity: 2
+  - pipe: actuators.base        # may move clear of the smoke
     min_integrity: 2
 on_fault: escalate
 on_complete: return             # pop the stack: whatever was interrupted resumes
@@ -153,7 +160,7 @@ A vector binds a device pipe to a handler at a priority. The kernel does the res
   priority: 5
   policy: coalesce        # level-triggered: read the latest value, not N copies
   min_interval: 30s       # storm throttle; a retained deferral, never a drop
-  deadline: 2s            # the safety budget this binding must meet
+  deadline: 2s            # the safety budget for this binding; recorded, not yet enforced
 ```
 
 ## 3.5 Channels and their trust: `system/pipes.yaml` and `world-state.yaml`
@@ -170,6 +177,14 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
   ring: TRUSTED
   principal: device
   world_object: robot.arm # writes here change world state
+- name: actuators.stove
+  ring: TRUSTED
+  principal: device
+  world_object: house.stove
+- name: actuators.base
+  ring: TRUSTED
+  principal: device
+  world_object: robot.position
 - name: user.commands
   ring: TRUSTED           # authenticated household members
   principal: user
@@ -186,7 +201,7 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
   world_object: house.alert
 ```
 
-`user.replies` is a *sink*, the third kind of pipe (core design §4.4): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
+`user.replies` is a *sink*, the third kind of pipe (core design §4.4): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm`, `actuators.stove`, `actuators.base` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
 
 ```yaml
 # world-state.yaml
@@ -220,7 +235,6 @@ The compiled job runs at the *speaker's* envelope intersected with the descripto
 
 ```
 <RESUME> Suspended 1m12s. Changed state you depend on:
-  house.stove: on -> off
   robot.position: kitchen -> hallway
 Revalidate your current plan step before acting. </RESUME>
 ```
