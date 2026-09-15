@@ -116,7 +116,7 @@ class Ring(enum.IntEnum):
     """Privilege of *content*, assigned by the kernel from provenance -- never
     claimed by the content itself (MP §4)."""
 
-    KERNEL = 0  # kernel notices, stubs' framing, vector preambles
+    KERNEL = 0  # kernel notices, stub and status-region framing
     DESCRIPTOR = 1  # the descriptor body at spawn; nothing else, ever
     TRUSTED = 2  # pipes explicitly marked trusted; endorser output
     EXTERNAL = 3  # tools, web, sensors, third-party messages
