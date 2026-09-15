@@ -194,7 +194,7 @@ class FaultKind(enum.StrEnum):
     """The fault taxonomy plus the core's scheduling faults.
 
     All of these dispatch through the same interrupt mechanism, so error handling
-    is also just descriptors (core §6.3).
+    is also just descriptors (core §6.2).
     """
 
     # Protected Mode
@@ -253,7 +253,7 @@ class VectorPolicy(enum.StrEnum):
 
 
 class OnComplete(enum.StrEnum):
-    """What a handler does to the stack beneath it when it finishes (core §6.3)."""
+    """What a handler does to the stack beneath it when it finishes (core §6.2)."""
 
     RETURN = "return"  # default: LIFO pop
     CANCEL_BELOW = "cancel-below"

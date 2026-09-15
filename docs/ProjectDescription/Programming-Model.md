@@ -186,7 +186,7 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
   world_object: house.alert
 ```
 
-`user.replies` is a *sink*, the third kind of pipe (core design §4.5): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
+`user.replies` is a *sink*, the third kind of pipe (core design §4.4): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
 
 ```yaml
 # world-state.yaml

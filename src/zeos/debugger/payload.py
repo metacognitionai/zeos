@@ -84,7 +84,7 @@ __all__ = [
 #: **A declared approximation.** ``PipeBindings`` records a name per alias and no
 #: direction, so this is convention rather than fact: ``stdin`` is the blocking read
 #: source, ``stdout`` the output sink, and ``tools`` is a write followed by a read of
-#: the result (core §4.3). Any other binding -- ``reset-count`` reaching a second
+#: the result (core §4.2). Any other binding -- ``reset-count`` reaching a second
 #: actuator through ``peer:`` -- could be either, so it is drawn as both. The journal
 #: is ground truth once there is one: observed reads and writes are what the animated
 #: view lights up, and a declared edge nothing ever travels is itself worth seeing.

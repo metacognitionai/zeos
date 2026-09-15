@@ -219,7 +219,7 @@ class Scheduler:
         """Remove up to ``depth`` jobs from the top of the stack.
 
         Used by a handler whose emergency invalidated the work beneath it
-        (core §6.3). The kernel journals each cancellation; this only unwinds.
+        (core §6.2). The kernel journals each cancellation; this only unwinds.
         """
         cancelled: list[Job] = []
         for _ in range(depth):

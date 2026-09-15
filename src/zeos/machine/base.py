@@ -104,7 +104,7 @@ class OpKind(enum.StrEnum):
     """What a decoding job is asking the kernel to do.
 
      In ZEOS a job's only effects are pipe writes, and its only inputs are pipe reads
-     (core §4.3: tool calls are pipe I/O). FAULT and NEED are the paging grammars
+     (core §4.2: tool calls are pipe I/O). FAULT and NEED are the paging grammars
     . There is deliberately no YIELD: jobs cannot volunteer
      scheduling decisions (core Appendix A, rule 2).
     """

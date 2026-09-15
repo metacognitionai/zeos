@@ -10,7 +10,7 @@ The kernel reads no clock, touches no file, and performs no I/O. Something has t
 and this is it. The driver owns:
 
 * **time** -- it decides what "now" is and tells the kernel via ``advance_time``;
-* **device adapters** -- turning external events into pipe writes (core §4.3);
+* **device adapters** -- turning external events into pipe writes (core §4.2);
 * **transports** -- polling for anything arriving from a peer node;
 * **the journal file** -- the kernel emits events, the driver persists them;
 * **the machine's trace** -- after each tick, a machine that can account for its

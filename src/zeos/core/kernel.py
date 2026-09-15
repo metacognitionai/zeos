@@ -228,7 +228,7 @@ def render_resume_notice(
 
     Public because it is behaviour, not presentation: a bare flag is not enough --
     the diff must be salient enough to override the stale in-context state the job
-    is still attending to (core §6.2). Whether current models honour it is the open
+    is still attending to (core §6.1). Whether current models honour it is the open
     question the M2 study exists to answer; what the kernel can guarantee is that
     the diff is correct, complete, and present.
     """
@@ -882,7 +882,7 @@ class Kernel:
         """Bring back a job that was suspended or blocked, and tell it what changed
         underneath it.
 
-        This is the one genuinely new problem (core §6.2): a classical OS restores
+        This is the one genuinely new problem (core §6.1): a classical OS restores
         registers and the process never knows it was gone, but a ZEOS job's saved
         state contains *beliefs about the world*, and the world moved.
         """

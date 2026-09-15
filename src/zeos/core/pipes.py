@@ -61,7 +61,7 @@ class PipeSpec:
     device: bool = False
     #: Actuator pipes: a write here changes world state. This is the mirror of
     #: "device drivers are adapters that turn external events into pipe writes"
-    #: (core §4.3) -- the outbound direction, where a pipe write becomes an effect.
+    #: (core §4.2) -- the outbound direction, where a pipe write becomes an effect.
     #: It is what lets a job's writes show up in another job's resume diff.
     world_object: str | None = None
     #: Sink pipes: written by a job, drained by the driver for the outside world -- the

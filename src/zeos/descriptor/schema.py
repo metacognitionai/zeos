@@ -190,7 +190,7 @@ class PipeBindings:
 
 @dataclass(frozen=True, slots=True)
 class CompletionPolicy:
-    """What a handler does to the stack beneath it when it finishes (core §6.3)."""
+    """What a handler does to the stack beneath it when it finishes (core §6.2)."""
 
     kind: OnComplete = OnComplete.RETURN
     depth: int = 0  # for cancel-below
