@@ -37,13 +37,14 @@ from __future__ import annotations
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from zeos.core.ids import JobId, PipeName, SegmentId, TokenKind
 
 __all__ = [
     "Token",
     "OpKind",
+    "NAMES_A_TARGET",
     "MachineRequest",
     "AttentionHint",
     "DecodeResult",
@@ -121,6 +122,11 @@ class OpKind(enum.StrEnum):
     RELEASE = "release"  # give it back
     SPAWN = "spawn"  # start a child job
     EXIT = "exit"  # job is done
+
+
+#: Ops whose argument is a name the kernel resolves, not content bound for a pipe. A
+#: command asking for one of these carries it in ``MachineRequest.text``.
+NAMES_A_TARGET: Final = frozenset({OpKind.SPAWN, OpKind.NEED})
 
 
 @dataclass(frozen=True, slots=True)
