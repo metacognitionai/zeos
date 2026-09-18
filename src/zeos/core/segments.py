@@ -51,6 +51,7 @@ __all__ = [
     "SegmentTable",
     "TAG_SELF",
     "TAG_DESCRIPTOR",
+    "TAG_ARGUMENTS",
     "map_tag",
 ]
 
@@ -59,6 +60,7 @@ __all__ = [
 #: resolves attention hints against them.
 TAG_SELF = "self"  # the job's own generated output
 TAG_DESCRIPTOR = "descriptor"  # the ring-1 body loaded at spawn
+TAG_ARGUMENTS = "arguments"  # the values this job was asked for with
 
 
 def map_tag(obj: object) -> str:

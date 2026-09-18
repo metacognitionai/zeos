@@ -126,6 +126,10 @@ class Job:
     vector_payload: tuple[Token, ...] = ()
     #: How clean the write that fired the vector was; the payload is injected at that.
     vector_payload_integrity: Integrity | None = None
+    #: The values this job was asked for with, sorted by name. Injected at
+    #: `_start_job`, after the body, so the job reads its instructions before its
+    #: parameters rather than the other way round.
+    arguments: tuple[tuple[str, str], ...] = ()
 
     # -- Protected Mode ------------------------------------------------------
 
