@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from zeos.core.capabilities import (
@@ -332,6 +334,14 @@ def test_narrow_schema_smuggles_almost_nothing() -> None:
 def test_wide_string_schema_smuggles_plenty() -> None:
     schema = Schema.parse("summary", {"summary": "string(2000)"})
     assert schema.capacity_bits() > 10_000
+
+
+def test_an_unbounded_string_is_an_unbounded_channel() -> None:
+    """Arithmetic on a missing bound scored this zero, which made the widest field
+    expressible look like the narrowest -- and the width lint, whose whole job is to say
+    when endorsement has stopped narrowing anything, saw nothing to report."""
+    schema = Schema.parse("summary", {"summary": "string"})
+    assert schema.capacity_bits() == math.inf
 
 
 def test_enum_capacity_is_logarithmic() -> None:

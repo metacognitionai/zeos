@@ -41,6 +41,7 @@ import enum
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 from zeos.core.ids import FaultKind, Integrity, PipeName
 from zeos.core.integrity import can_write_at, effective_integrity
@@ -106,8 +107,13 @@ class FieldSpec:
             case FieldKind.NUMBER:
                 return 64.0
             case FieldKind.STRING:
-                # ~95 printable ASCII characters.
-                return (self.max_length or 0) * math.log2(95)
+                # ~95 printable ASCII characters. A string with no declared length is
+                # unbounded, and scoring it zero -- as arithmetic on a missing bound
+                # does -- makes the widest field expressible look like the narrowest,
+                # which is the direction this estimate must never be wrong in.
+                if self.max_length is None:
+                    return math.inf
+                return self.max_length * math.log2(95)
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,11 +351,30 @@ def check_write(
 
 
 def schemas_from_spec(raw: Mapping[str, object]) -> dict[str, Schema]:
-    """Parse a ``schemas:`` block from case configuration."""
+    """Parse a ``schemas:`` block from case configuration.
+
+    Two shapes, because an endorsement has two useful ones. A mapping of field to type is
+    a record. A list is the degenerate and most valuable case -- an actuator accepts a
+    *value*, not a record, and ``[idle, normal, max]`` is a channel of 1.6 bits.
+
+    Anything else is an error rather than a skip. A schema that fails to parse and is
+    quietly dropped reappears as "unknown schema" against the capability that named it,
+    which points at the wrong file.
+    """
     schemas: dict[str, Schema] = {}
     for name, spec in raw.items():
         if isinstance(spec, Mapping):
             schemas[str(name)] = Schema.parse(str(name), spec)  # pyright: ignore[reportUnknownArgumentType]
+        elif isinstance(spec, Sequence) and not isinstance(spec, str):
+            choices = [str(c) for c in cast("Sequence[object]", spec)]
+            if not choices:
+                raise ValueError(f"schema {str(name)!r}: a list of choices may not be empty")
+            schemas[str(name)] = Schema.of_values(str(name), choices)
+        else:
+            raise ValueError(
+                f"schema {str(name)!r}: expected a mapping of field to type, or a list of "
+                f"permitted values; got {type(spec).__name__}"
+            )
     return schemas
 
 

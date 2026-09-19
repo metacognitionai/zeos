@@ -27,6 +27,7 @@ from typing import Any, cast
 
 import yaml
 
+from zeos.core.capabilities import Schema, schemas_from_spec
 from zeos.core.embodiment import PlatformProfile
 from zeos.core.gates import ALLOW, VETO, GateSpec, GateTable
 from zeos.core.ids import (
@@ -72,6 +73,10 @@ class CaseBundle:
     principals: PrincipalTable | None = None
     #: Semantic guards on actuator paths.
     gates: GateTable | None = None
+    #: The shapes an endorsement may take, by name. Already resolved into the
+    #: capabilities that named them; carried here so a loaded case is the whole case,
+    #: and so a reader can see how wide the channel that raises trust was allowed to be.
+    schemas: Mapping[str, Schema] = field(default_factory=dict[str, Schema])
     world: Mapping[ObjectName, str] = field(default_factory=dict[ObjectName, str])
     #: Descriptors spawned at start. Handlers are not booted -- they are dispatched
     #: by their vectors -- so this is normally just the goal jobs.
@@ -99,9 +104,13 @@ def split_frontmatter(text: str, *, source: str) -> tuple[Mapping[str, Any], str
     raise DescriptorError(f"{source}: unterminated frontmatter (no closing '---')")
 
 
-def parse_descriptor_file(path: Path) -> tuple[Descriptor, Script | None]:
+def parse_descriptor_file(
+    path: Path, schemas: Mapping[str, Schema] | None = None
+) -> tuple[Descriptor, Script | None]:
+    """Parse one descriptor file. ``schemas`` are the case's, which is what a capability's
+    ``schema:`` names; without them the name has nothing to resolve against."""
     raw, body = split_frontmatter(path.read_text(encoding="utf-8"), source=str(path))
-    descriptor = Descriptor.from_frontmatter(raw, body=body, source=str(path))
+    descriptor = Descriptor.from_frontmatter(raw, body=body, source=str(path), schemas=schemas)
     script_spec = descriptor.extra.get("script")
     script: Script | None = None
     if script_spec is not None:
@@ -121,10 +130,16 @@ def load_case(root: Path) -> CaseBundle:
     if not root.is_dir():
         raise DescriptorError(f"{root}: not a directory")
 
+    # Before the descriptors, because a capability's ``schema:`` is a name that has to
+    # resolve to one of these. Endorsement is the only integrity-raising operation in the
+    # system, and a schema is what bounds it -- so this is the file that decides how wide
+    # the one channel that raises trust is allowed to be.
+    schemas = _load_schemas(root / "system" / "schemas.yaml")
+
     descriptors: dict[DescriptorName, Descriptor] = {}
     scripts: dict[str, Script] = {}
     for path in sorted(_descriptor_paths(root)):
-        descriptor, script = parse_descriptor_file(path)
+        descriptor, script = parse_descriptor_file(path, schemas)
         if descriptor.name in descriptors:
             previous = descriptors[descriptor.name].source
             raise DescriptorError(
@@ -146,6 +161,7 @@ def load_case(root: Path) -> CaseBundle:
         platforms=_load_platforms(root / "platforms"),
         principals=_load_principals(system / "principals.yaml"),
         gates=_load_gates(system / "gates.yaml"),
+        schemas=schemas,
         world=_load_world(system / "world-state.yaml"),
         boot=_load_boot(system / "boot.yaml", root, descriptors, vectors),
         root=root,
@@ -242,6 +258,19 @@ def _load_pipes(path: Path) -> tuple[PipeSpec, ...]:
             )
         )
     return tuple(specs)
+
+
+def _load_schemas(path: Path) -> dict[str, Schema]:
+    """Load ``system/schemas.yaml`` -- the shapes an endorsement may take."""
+    raw = _load_yaml(path)
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise DescriptorError(f"{path}: expected a mapping of schema name -> shape")
+    try:
+        return schemas_from_spec(cast("Mapping[str, Any]", raw))
+    except ValueError as exc:
+        raise DescriptorError(f"{path}: {exc}") from exc
 
 
 def _load_vectors(path: Path) -> tuple[VectorSpec, ...]:
