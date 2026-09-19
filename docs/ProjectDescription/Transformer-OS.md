@@ -190,17 +190,18 @@ One wake mechanism serves dataflow, tool completion, and interrupts -- the
 interrupt vector table is just the table of (pipe → handler, priority)
 bindings.
 
-### 4.4 Three kinds of pipe
+### 4.4 Four kinds of pipe
 
 Every pipe is a bounded token buffer with the semantics of §4.1. Its
-declaration says which of three things it is for, and the difference is what
-happens on the way out:
+declaration says which of four things it is for, and the difference is what
+happens on the way in or out:
 
 | kind | declared by | written by | read by | what a write is |
 | --- | --- | --- | --- | --- |
 | ordinary | nothing extra | a job or a device | a job | a message: appended, read once, gone; received at the worse of the pipe's ring and the writer's integrity |
 | actuator | `world_object:` | a job or a device | nobody need read it | a value: latches, replacing what was there, and becomes world state at the writer's integrity |
 | sink | `sink: true` | a job | the driver | a history: appended, drained for the outside world |
+| front door | `utterance_source:` and `reply_to:` | a device | nobody; the kernel compiles it | an utterance: compiled into a job at the speaker's authority, or nothing; never landed as tokens |
 
 An **actuator** is the outbound half of §4.2: a write to it changes the
 named world object, which is how one job's effect shows up in another job's
@@ -213,7 +214,10 @@ the full sink. A job that tries to read a sink raises a capability fault: a
 sink has no reader inside the system, by declaration.
 
 A device delivery is the inbound direction on an ordinary or actuator pipe,
-and is refused whole when it does not fit (§4.2).
+and is refused whole when it does not fit (§4.2). On a front door it is not a
+delivery at all: the text is compiled against the descriptors' declared
+utterances, the speaker named by the pipe is echoed what was understood on the
+reply pipe, and a job is spawned or nothing is.
 
 ## 5. Interrupts and preemption
 

@@ -188,6 +188,8 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
 - name: user.commands
   ring: TRUSTED           # authenticated household members
   principal: user
+  utterance_source: badge:household-alice   # a front door: what arrives here is compiled
+  reply_to: user.replies
 - name: user.replies
   ring: TRUSTED
   principal: user
@@ -195,13 +197,15 @@ Every pipe declares its ring here -- by the kernel, from provenance, never claim
 - name: frontdoor.mic
   ring: EXTERNAL          # ring 3: an open-air microphone
   principal: user
+  utterance_source: mic:unauthenticated
+  reply_to: user.replies
 - name: alerts.household
   ring: TRUSTED
   principal: device
   world_object: house.alert
 ```
 
-`user.replies` is a *sink*, the third kind of pipe (core design §4.4): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `actuators.arm`, `actuators.stove`, `actuators.base` and `alerts.household` are actuators, whose writes latch into world state; the rest are ordinary pipes.
+`user.replies` is a *sink* (core design §4.4): jobs write it, nobody inside the system reads it, and the driver drains it for the household. `user.commands` and `frontdoor.mic` are *front doors*: text arriving there is compiled, never read as a message, and the speaker is answered on `user.replies`. `actuators.arm`, `actuators.stove`, `actuators.base` and `alerts.household` are actuators, whose writes latch into world state. `sensors.smoke` is an ordinary pipe.
 
 ```yaml
 # world-state.yaml
