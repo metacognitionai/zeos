@@ -84,7 +84,23 @@ X=0 means "may inform, must not direct." This cannot be enforced inside the forw
 
 **Low-water-mark** (`core/integrity.py`): each job's `current_integrity` starts at its descriptor's level and falls to the level of what it reads -- demotion is attention-thresholded (mass ≥ θ_read), so merely *containing* dirt does not demote; *using* it does. That threshold needs a measurement: when the backend cannot measure attention, the kernel takes provenance alone and demotes the job to the worst thing it could see, at each block boundary and before each write. Writes above the job's current level raise a **privilege fault** carrying the demotion history: which segments dragged it down, via which pipes.
 
-Monotone decay would make long-lived jobs end up minimally trusted, so there are two escape hatches, in preference order: **compartmentalize** (spawn a low-integrity child to read the dirt and return results over a pipe -- the parent's watermark never moves); **endorse** (a designated guard job reads ring-3 material and re-emits at ring 2 under a narrow output schema -- the only integrity-raising operation, and the schema width is the security dial; a write without a schema is not refused, it lands and its reader receives it at the writer's integrity).
+Monotone decay would make long-lived jobs end up minimally trusted, so there are two escape hatches, in preference order: **compartmentalize** (spawn a low-integrity child to read the dirt and return results over a pipe -- the parent's watermark never moves); **endorse** (a designated guard job reads ring-3 material and re-emits at ring 2 under a narrow output schema -- the only integrity-raising operation, and the schema width is the security dial; a write without a schema is not refused, it lands and its reader receives it at the writer's integrity). A case declares its schemas in `system/schemas.yaml`, either as a record of typed fields or as a list of permitted values, and a capability names one with `schema:`.
+
+```yaml
+# system/schemas.yaml
+narrow-summary:            # a record of typed fields
+  verdict: enum(ok, blocked)
+  count: number
+fan-speed: [idle, normal, max]   # a list of permitted values
+```
+
+```yaml
+# in a descriptor's frontmatter
+capabilities:
+  - pipe: reports.out
+    min_integrity: 2
+    schema: narrow-summary
+```
 
 Taint travels through the world as well as through pipes. When a demoted job writes an actuator, the object it changes takes the job's integrity. Every job that views that object, in a status region or a resume diff, receives the value at that integrity and is demoted if it uses it. The ways out are the same as for pipes: a compartment views the object, or an endorser writes it through a schema.
 
