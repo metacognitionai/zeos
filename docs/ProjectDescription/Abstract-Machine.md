@@ -320,7 +320,7 @@ OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RE
 
 **`WRITE_READ`** is one request that the kernel performs as two operations -- `pipe` is written, then `read_pipe` is read -- within a single `tick`, so no preemption check falls between them. It exists because the universal shape of a turn is *hand over, then sleep*, and splitting that across two ticks lets the peer the write just woke take the machine one command before the job would have yielded it anyway. Backends opt in by emitting it; one that keeps emitting separate `WRITE` and `READ` behaves exactly as before. The read half is performed only if the write half completed.
 
-**`MALFORMED`** is how a machine reports a command it closed but could not shape into a request -- a verb its ABI does not declare, or one missing the pipe it takes -- with the words in `text`. The kernel raises a `malformed_request` fault from it, so the job is told and the journal says so; a machine that dropped such a command would leave the kernel unable to tell it from a job thinking out loud. A backend that constrains sampling to its ABI never emits it.
+**`MALFORMED`** is how a machine reports a command it closed but could not turn into a request. Three things cause it: the verb is not in the ABI, a verb that takes a pipe was given none, or a verb that takes a name was given none. The words of the command are kept in the request's `text` field, so the kernel can quote them back to the job in the fault notice. The kernel raises a `malformed_request` fault from it, so the job is told and the journal says so; a machine that dropped such a command would leave the kernel unable to tell it from a job thinking out loud. A backend that constrains sampling to its ABI never emits it.
 
 **There is deliberately no YIELD.** From the interface's own comment: *jobs cannot volunteer scheduling decisions.* Scheduling is the kernel's, entirely. A job blocks because it read an empty pipe, waited on a resource, or faulted, and never because it decided to be polite. This is the whole difference between ZEOS and an agent loop, and it is enforced by the absence of a token in an enum, which is the cheapest possible place to enforce it.
 
@@ -333,6 +333,8 @@ OpKind = NONE | READ | WRITE | WRITE_READ | SELECT | FAULT | NEED | ACQUIRE | RE
 ## 11.1 The command language is declared once, as data
 
 A model asks the kernel for things by emitting text such as `write stdout hello;`. The vocabulary is a `SyscallABI`: a tuple of verbs, each naming the `OpKind` it asks for and whether it takes a pipe and a payload; the pipe aliases a command may use, which the kernel resolves against the descriptor's `pipes:` bindings; the terminator that closes a command; and a cap on payload length. The cap is short in the default, sixteen words, because a roomy payload lets one command carry a whole plan and a plan is not a syscall.
+
+A verb takes either a payload or a name, depending on its op. Most calls take a payload: text for a pipe, split into tokens and capped in length. `SPAWN` and `NEED` take a name: the child to start, or the content to fetch. The name is carried whole in the request's `text` field, and the prose shows it as `<name>`. A verb that takes a name cannot also take a pipe.
 
 Verbs divide into two kinds. A *line* asks the kernel for nothing (`say`, thinking out loud); a job may issue any number before a *call*, which asks for something (`write`, `read`, `exit`) and so ends the job's round. There is no verb for yielding, for the reason §10 gives.
 
@@ -356,7 +358,13 @@ A backend keeps a model inside the ABI in one of three ways, and they are not eq
 | a schema the reply must fit | the space-invaders API machine | the shape is fixed; the words inside it are checked by the kernel like any request |
 | prose plus a pattern | the API seats (`claude`, `claude-code`) | none; the command is whatever the pattern finds in the reply, or the whole reply if it finds nothing |
 
-Only the first two rule out a command outside the ABI. The third is where `MALFORMED` (§10) comes from: a closed command with an undeclared verb, or a pipe verb without its pipe, becomes a `MALFORMED` request carrying the words, the kernel raises a `malformed_request` fault, and the descriptor's `on_fault` decides what follows -- a notice and another try, or the end of the job. A grammar-constrained backend never emits it.
+Only the first two rule out a command outside the ABI. The third is where `MALFORMED` (§10) comes from. A closed command becomes a `MALFORMED` request carrying the words when:
+
+- the verb is not in the ABI;
+- a pipe verb has no pipe;
+- a naming verb has no name.
+
+The kernel raises a `malformed_request` fault, and the descriptor's `on_fault` decides what follows: a notice and another try, or the end of the job. A grammar-constrained backend never emits it.
 
 ## 11.4 What is real here and what stands in
 
