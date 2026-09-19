@@ -169,7 +169,7 @@ from zeos.core.integrity import (
 )
 from zeos.core.pager import Pager, PagerResult, choose_plan
 from zeos.core.pcb import Job
-from zeos.core.pipes import Pipe, PipeFull, PipeTable
+from zeos.core.pipes import Pipe, PipeFull, PipeSpec, PipeTable
 from zeos.core.principals import (
     KERNEL_PRINCIPAL,
     Elevation,
@@ -669,12 +669,42 @@ class Kernel:
         can retry, coalesce or drop knowingly. The kernel holds nothing on a device's
         behalf, because a device, unlike a blocked job, does not stop producing.
         """
+        if self.pipes.has(pipe_name):
+            spec = self.pipes.get(pipe_name).spec
+            if spec.utterance_source is not None:
+                self._hear(spec, text)
+                return
         gate = self.gates.for_pipe(pipe_name)
         if gate is not None:
             self._guard_delivery(gate, text)
             return
         self._deliver_now(pipe_name, text)
         _ = principal  # provenance is stamped at INJECT, from the pipe's binding
+
+    def _hear(self, spec: PipeSpec, text: str) -> None:
+        """Text on a front door is compiled, not landed.
+
+        This is the route the NLI design has always described and nothing could take:
+        a person says something to a device, and what the kernel does with it is decide
+        whether it compiles to anything they may ask for. Nothing is written to the pipe,
+        so nothing reads it as data and no vector fires on it -- an utterance is an
+        instruction to the *kernel*, and the only thing it can become is a job.
+
+        Who spoke comes from the pipe. A device that hears two people is two pipes.
+        """
+        # Both are guaranteed by PipeSpec: a front door declares a speaker and a way to
+        # answer them, or it is not a front door. The asserts narrow the types.
+        assert spec.utterance_source is not None
+        assert spec.reply_to is not None
+        self.handle_utterance(
+            Utterance(
+                text=text,
+                principal=spec.utterance_source,
+                source_pipe=spec.name,
+                reply_pipe=spec.reply_to,
+                at=self.clock.token_clock,
+            )
+        )
 
     def drain(self, pipe_name: PipeName) -> tuple[Token, ...]:
         """The driver takes everything a job wrote to a sink out to the world.
@@ -1825,14 +1855,28 @@ class Kernel:
         )
 
     def _echo(self, utterance: Utterance, decision: Decision) -> None:
+        """What the speaker is told, before anything runs.
+
+        The event is the record and the write is the courtesy, so a missing or unsuitable
+        reply pipe costs the journal nothing. The write became possible at all only when
+        sinks did: before that there was no outbound path that kept a history, and an
+        echo-back that overwrote the last one is not an answer.
+        """
+        text = echo_back(decision)
         self._emit(
             EchoedBack(
                 clock=self.clock,
                 principal=utterance.principal,
-                text=echo_back(decision),
+                text=text,
                 awaiting_confirmation=decision.needs_confirmation,
             )
         )
+        reply = utterance.reply_pipe
+        if self.pipes.has(reply) and self.pipes.get(reply).spec.sink:
+            # refuse=False: an echo that does not fit is journalled as backpressure and
+            # dropped. Failing the utterance because its receipt was too long would be a
+            # denial of service anyone could spell.
+            self._deliver_now(reply, text, refuse=False)
 
     def _phrasings(self) -> tuple[Phrasing, ...]:
         """Every declared phrasing in the library, in a fixed order.

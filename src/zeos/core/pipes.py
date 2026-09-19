@@ -28,7 +28,7 @@ from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from zeos.core.ids import KERNEL_PIPE, Integrity, JobId, PipeName, Principal, Ring
+from zeos.core.ids import KERNEL_PIPE, Integrity, JobId, PipeName, Principal, PrincipalId, Ring
 from zeos.machine.base import Token
 
 __all__ = ["PipeSpec", "Pipe", "PipeTable", "PipeError", "PipeFull", "Write", "DEFAULT_CAPACITY"]
@@ -67,6 +67,18 @@ class PipeSpec:
     #: Sink pipes: written by a job, drained by the driver for the outside world -- the
     #: other outbound kind, a history rather than a value, and ``deliver``'s mirror.
     sink: bool = False
+    #: The principal whose words arrive here. Set makes this pipe a *front door*: text
+    #: delivered to it is compiled against the phrasing table rather than landing as
+    #: tokens for a job to read.
+    #:
+    #: Identity comes from the device, never from the content -- the same rule as ring
+    #: and principal (MP §4). Two identities means two pipes, which is what a guest
+    #: intercom and an operator console are anyway.
+    utterance_source: PrincipalId | None = None
+    #: Where a speaker is answered: the echo-back before dispatch, and any request to
+    #: confirm. Required on a front door, because a door nobody can be answered through
+    #: leaves a speaker watching a job fail at an actuator nothing warned them about.
+    reply_to: PipeName | None = None
 
     @property
     def floor(self) -> Integrity:
@@ -78,6 +90,16 @@ class PipeSpec:
             raise PipeError(f"pipe {self.name!r} is reserved for the kernel's own notices")
         if self.sink and self.world_object:
             raise PipeError(f"pipe {self.name!r} cannot be both a sink and an actuator")
+        if self.utterance_source is not None and (self.sink or self.world_object):
+            raise PipeError(
+                f"pipe {self.name!r} is a front door, which is inbound; it cannot also be "
+                "a sink or an actuator"
+            )
+        if (self.reply_to is None) != (self.utterance_source is None):
+            raise PipeError(
+                f"pipe {self.name!r}: 'utterance_source' and 'reply_to' go together -- a "
+                "front door needs somewhere to answer, and nothing else has anyone to answer"
+            )
 
 
 @dataclass(frozen=True, slots=True)

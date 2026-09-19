@@ -231,6 +231,14 @@ def _load_pipes(path: Path) -> tuple[PipeSpec, ...]:
                 world_object=(
                     None if spec.get("world_object") is None else str(spec["world_object"])
                 ),
+                utterance_source=(
+                    None
+                    if spec.get("utterance_source") is None
+                    else PrincipalId(str(spec["utterance_source"]))
+                ),
+                reply_to=(
+                    None if spec.get("reply_to") is None else PipeName(str(spec["reply_to"]))
+                ),
             )
         )
     return tuple(specs)
