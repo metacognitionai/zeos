@@ -65,7 +65,14 @@ A job's only effects are pipe writes, and pipes are held as **capabilities** (`c
 
 ## 5.3 Tag unforgeability (hard): trapping privileged instructions
 
-The kernel marks its own notices with a special `CONTROL` token kind that the model cannot produce. Text that merely looks like a kernel tag, such as `<KERNEL>` arriving from a web page, is ordinary text with no authority. When such an imitation enters a context through a pipe read, a vector payload or a status region, the kernel raises a spoof fault: the job is told the text is data, not a notice, and carries on. The fault never aborts, whatever the job's `on_fault` policy says, because otherwise any device could kill a job by spelling a tag.
+The kernel marks its own notices with a special `CONTROL` token kind that the model cannot produce. Text that merely looks like a kernel tag, such as `<KERNEL>` arriving from a web page, is ordinary text with no authority. When such an imitation enters a context, the kernel raises a spoof fault. It can enter through:
+
+- a pipe read;
+- a vector payload;
+- a status region;
+- the values a job was asked for with.
+
+The job is told the text is data, not a notice, and carries on. The fault never aborts, whatever the job's `on_fault` policy says, because otherwise any device could kill a job by spelling a tag.
 
 Whether the model itself can see the difference depends on the backend. A seat that hands the model its transcript as text shows imitations escaped, as `&lt;RESUME&gt;`, and real frames as they are. The llama.cpp machine feeds text through unchanged, so there a frame and its imitation look the same to the model, and the spoof alarm and boundary check are what protect it.
 
