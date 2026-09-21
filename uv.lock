@@ -21,7 +21,7 @@ wheels = [
 
 [[package]]
 name = "anthropic"
-version = "1.5.0"
+version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -32,9 +32,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/43/6f3f6006f5216d43a059a1a856d275ef6536cdfa94883b64cc04d7873cb7/anthropic-1.5.0.tar.gz", hash = "sha256:b25f87f5758861f25993383a5c9bf274eb6e0f1b010c84019ad91854cb4e1bc6", size = 1156657, upload-time = "2026-09-10T17:45:35.93Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/8b/4210dd090000ba35d07cee9105530794911d955788c3992b4882df49eaac/anthropic-1.7.0.tar.gz", hash = "sha256:0ab1b04668606ba1ae93f6d9e8dcc2e0c4f0debebd4eea4773a3a595f0836db1", size = 1181035, upload-time = "2026-09-18T16:13:05.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/1c/c32fce35ca0be0205f2377d2238e3ed73dea5abc2be09d15fbd032091d60/anthropic-1.5.0-py3-none-any.whl", hash = "sha256:d9ce04b29ad1f7025dda3e3bc478cde8d2924d2de5417d2d4a4bb0378ecbc2a6", size = 1235236, upload-time = "2026-09-10T17:45:34.216Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/dc/74995efda028421917f4caabd24db1373ee0742573a2363fff1a21191441/anthropic-1.7.0-py3-none-any.whl", hash = "sha256:6b681b6ee00f232bb54f50f9a0d6d30e7be368c1b6f754bfd470c8385b8b6058", size = 1255606, upload-time = "2026-09-18T16:13:03.725Z" },
 ]
 
 [[package]]
@@ -351,7 +351,7 @@ wheels = [
 
 [[package]]
 name = "huggingface-hub"
-version = "1.31.0"
+version = "1.32.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -364,9 +364,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/f0/61159db90b5cd275d55516fe27920828e7d3be4053fdbdb27c3f70e5f1ef/huggingface_hub-1.31.0.tar.gz", hash = "sha256:f8e9e710a210613fa5d0f26bba6da05ef4aef9fba5a0f23f508f5ac4d08b6f90", size = 968039, upload-time = "2026-09-10T10:27:22.724Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/0f/e83fdd856da8fca26bf78d71709ebd120432a0ce535e72b9597cab1eb5bf/huggingface_hub-1.32.0.tar.gz", hash = "sha256:ed70a45498abe86039df7c2f4e5f7575de524be908d3840e8f828d5525eafd6a", size = 1038662, upload-time = "2026-09-17T10:27:48.049Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/7f/3f886a625043b77312b80da2f2bf00b5ecbf5a73061af1aa0259cd258c9d/huggingface_hub-1.31.0-py3-none-any.whl", hash = "sha256:9dbb6a503cbe2494ea666695207e7262d410659e09134059deb83e5480864667", size = 798313, upload-time = "2026-09-10T10:27:20.798Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/cf/d98dd561d6d0d7b7d7a64d1563f8aaaa7c235daee41c1c9bcc3da62420ed/huggingface_hub-1.32.0-py3-none-any.whl", hash = "sha256:b0c7c80561969d9cdacdd55fce67ba9584cca0b9d4ea80957a3a5c1445fac5c8", size = 842906, upload-time = "2026-09-17T10:27:46.102Z" },
 ]
 
 [[package]]
@@ -635,7 +635,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "3.13.0"
+version = "3.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -645,9 +645,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/f1/4874c4f7db30121885e6a763e2670b2fe1d76c79ed4732f8acbb51c8d96e/openai-3.13.0.tar.gz", hash = "sha256:a8f87a9b3b9c08eb446d68bd0a80e8ec907c4c35fdea63f4265c7b34b2de3a60", size = 1624217, upload-time = "2026-09-10T19:38:27.597Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/d7/79e049e0e2e63792910827aaa9b8a814d1b214fa4dbe901040c384a1cf57/openai-3.16.0.tar.gz", hash = "sha256:08c6bd1db3d69039bdd0af63f1d1ba007fde93460257925c49d49c8d7ad15b9e", size = 1671137, upload-time = "2026-09-18T14:53:40.089Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/63/7f/ee9ebb7c5ab7abf016969faec7c748a91c1fd893078bfe1e5ba5d82e96c2/openai-3.13.0-py3-none-any.whl", hash = "sha256:e35b1f6fe99245e86e37504d9fad1ad2a363807307c424232c1d849bd0666c8e", size = 2009683, upload-time = "2026-09-10T19:38:25.855Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/61/d8e79383c607faca8ffa2db61b238e0af3f5f2056d35620ad39dcdf6dc94/openai-3.16.0-py3-none-any.whl", hash = "sha256:45b47caea12c09d6241642a244fc208bdde887ccd6408ffe4fb73608bb15815d", size = 2030929, upload-time = "2026-09-18T14:53:37.982Z" },
 ]
 
 [[package]]
