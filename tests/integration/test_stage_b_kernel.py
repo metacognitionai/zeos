@@ -255,7 +255,7 @@ def test_unpreemptible_job_masks_interrupts() -> None:
 
 
 def test_resume_carries_a_dirty_diff_naming_what_changed() -> None:
-    """The one genuinely new problem (core §6.2): the job's saved state contains
+    """The one genuinely new problem (core §6.1): the job's saved state contains
     beliefs, and the world moved while the handler ran."""
     kernel, events = build(
         descriptors=[SUPERVISION, GAS_ALARM],
@@ -326,7 +326,7 @@ def test_resume_notice_text_names_the_object_and_both_values() -> None:
     bare flag would not be salient enough to override stale in-context state.
 
     Note the duration rendering departs from the spec's illustrative "Suspended
-    94s" (core §6.2): durations roll over into minutes and hours. That matters for
+    94s" (core §6.1): durations roll over into minutes and hours. That matters for
     the partition case, where a suspension can run for hours and "11520s" is
     materially less legible than "3h12m".
     """

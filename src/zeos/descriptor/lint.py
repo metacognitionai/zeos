@@ -140,6 +140,8 @@ def lint(
 
     rings = {p.name: p.ring for p in pipes}
 
+    findings.extend(_check_front_doors(pipes))
+
     for name in sorted(descriptors):
         d = descriptors[name]
         findings.extend(_check_masking(d, opts))
@@ -517,6 +519,40 @@ def _check_unimplemented_keys(d: Descriptor) -> list[Finding]:
                     descriptor=d.name,
                 )
             )
+    return findings
+
+
+def _check_front_doors(pipes: Sequence[PipeSpec]) -> list[Finding]:
+    """A front door's answer must go somewhere a person can be handed a history.
+
+    ``PipeSpec`` already refuses a door with no ``reply_to`` at all. What it cannot see
+    is the other pipe, so this is where "answer me on that one" is checked against what
+    that one is. A reply written to an ordinary pipe is worse than no reply: some job
+    reads the receipt meant for a person, as a message.
+    """
+    by_name = {p.name: p for p in pipes}
+    findings: list[Finding] = []
+    for spec in pipes:
+        if spec.reply_to is None:
+            continue
+        target = by_name.get(spec.reply_to)
+        if target is None:
+            detail = f"answers on {str(spec.reply_to)!r}, which is not declared"
+        elif not target.sink:
+            detail = (
+                f"answers on {str(spec.reply_to)!r}, which is not a sink; an echo-back "
+                "written there is a message some job reads, not an answer drained to the "
+                "person who spoke"
+            )
+        else:
+            continue
+        findings.append(
+            Finding(
+                rule="unanswerable-front-door",
+                severity=Severity.ERROR,
+                detail=f"front door {str(spec.name)!r} {detail}",
+            )
+        )
     return findings
 
 

@@ -7,7 +7,7 @@
 """A job woken from BLOCKED is told what moved in its read set, as a preempted
 job is.
 
-The resume diff (core §6.2) is computed from a baseline. ``_preempt`` records
+The resume diff (core §6.1) is computed from a baseline. ``_preempt`` records
 ``suspended_at``; ``Kernel._block`` records ``blocked_at`` at every site a job
 parks -- read, select, acquire, a full pipe, a gate -- and ``_resume`` diffs from
 the earlier of the two. A woken job's notice opens "Waited" rather than

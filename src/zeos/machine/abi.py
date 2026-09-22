@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from zeos.core.ids import PipeName
-from zeos.machine.base import MachineRequest, OpKind, tokens_from_text
+from zeos.machine.base import NAMES_A_TARGET, MachineRequest, OpKind, tokens_from_text
 
 __all__ = ["DEFAULT", "SyscallABI", "Verb"]
 
@@ -39,7 +39,8 @@ class Verb:
     doc: str = ""
 
     def signature(self, terminator: str) -> str:
-        parts = [self.name] + (["<pipe>"] if self.pipe else []) + (["<text>"] if self.text else [])
+        argument = "<name>" if self.op in NAMES_A_TARGET else "<text>"
+        parts = [self.name] + (["<pipe>"] if self.pipe else []) + ([argument] if self.text else [])
         return " ".join(parts) + terminator
 
 
@@ -68,6 +69,9 @@ class SyscallABI:
             raise ValueError("the terminator must be a visible character")
         if self.max_text is not None and self.max_text < 1:
             raise ValueError("max_text must be at least 1, or None")
+        named = [v.name for v in self.verbs if v.op in NAMES_A_TARGET and v.pipe]
+        if named:
+            raise ValueError(f"these verbs name a target, so they take no pipe: {sorted(named)}")
 
     def verb(self, name: str) -> Verb | None:
         wanted = name.lower()
@@ -84,8 +88,8 @@ class SyscallABI:
         return tuple(v for v in self.verbs if v.op is not OpKind.NONE)
 
     def parse(self, line: str) -> MachineRequest:
-        """The request one completed command asks for; an undeclared verb, or a pipe verb
-        with no pipe, is a ``MALFORMED`` request carrying the words."""
+        """The request one completed command asks for. An undeclared verb, a pipe verb with
+        no pipe, or a naming verb with no name is a ``MALFORMED`` request carrying the words."""
         command = line.strip().rstrip(self.terminator).strip()
         head, _, rest = command.partition(" ")
         verb = self.verb(head)
@@ -99,7 +103,14 @@ class SyscallABI:
             pipe, _, rest = rest.partition(" ")
             if not pipe:
                 return MachineRequest(op=OpKind.MALFORMED, text=command)
-        payload = tokens_from_text(rest.strip()) if verb.text else ()
+        rest = rest.strip()
+        if verb.op in NAMES_A_TARGET:
+            # The kernel resolves this argument as a name, so it travels in ``text``;
+            # a payload of tokens is not something it can look up.
+            if not rest:
+                return MachineRequest(op=OpKind.MALFORMED, text=command)
+            return MachineRequest(op=verb.op, text=rest)
+        payload = tokens_from_text(rest) if verb.text else ()
         return MachineRequest(
             op=verb.op, pipe=PipeName(pipe) if pipe is not None else None, payload=payload
         )

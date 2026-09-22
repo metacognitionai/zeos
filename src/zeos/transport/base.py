@@ -8,10 +8,9 @@
 
 This interface is the whole of phase 1's distribution work, and it is deliberately
 small. The claim of the distribution design is that pipes are already the right seam:
-they are the only inter-job communication mechanism, and the kernel already chooses
-transport per pipe (zero-copy over shared KV when producer and consumer share a
-model, text copy otherwise -- core §4.2). "Same node vs. different node" is one more
-transport choice behind an interface that already had to exist.
+they are the only inter-job communication mechanism, and every pipe read already
+enters the reader's context as a token copy (core §4.1). "Same node vs. different
+node" is one more transport choice behind an interface that already had to exist.
 
 So there is nothing clever here. What matters is the two constraints it enforces:
 
@@ -23,9 +22,8 @@ So there is nothing clever here. What matters is the two constraints it enforces
 
 Only ``LocalTransport`` ships in phase 1. When a real transport lands, two things
 follow from the specs and should be encoded here rather than rediscovered:
-zero-copy is impossible across a link (it needs a shared KV materialisation, so
-cross-node pipes always fall back to text copy), and inbound traffic must carry its
-ring and principal so that provenance survives the hop.
+cross-node pipes carry text, and inbound traffic must carry its ring and principal
+so that provenance survives the hop.
 """
 
 from __future__ import annotations

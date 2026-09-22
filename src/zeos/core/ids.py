@@ -116,7 +116,7 @@ class Ring(enum.IntEnum):
     """Privilege of *content*, assigned by the kernel from provenance -- never
     claimed by the content itself (MP §4)."""
 
-    KERNEL = 0  # kernel notices, stubs' framing, vector preambles
+    KERNEL = 0  # kernel notices, stub and status-region framing
     DESCRIPTOR = 1  # the descriptor body at spawn; nothing else, ever
     TRUSTED = 2  # pipes explicitly marked trusted; endorser output
     EXTERNAL = 3  # tools, web, sensors, third-party messages
@@ -194,7 +194,7 @@ class FaultKind(enum.StrEnum):
     """The fault taxonomy plus the core's scheduling faults.
 
     All of these dispatch through the same interrupt mechanism, so error handling
-    is also just descriptors (core §6.3).
+    is also just descriptors (core §6.2).
     """
 
     # Protected Mode
@@ -253,7 +253,7 @@ class VectorPolicy(enum.StrEnum):
 
 
 class OnComplete(enum.StrEnum):
-    """What a handler does to the stack beneath it when it finishes (core §6.3)."""
+    """What a handler does to the stack beneath it when it finishes (core §6.2)."""
 
     RETURN = "return"  # default: LIFO pop
     CANCEL_BELOW = "cancel-below"

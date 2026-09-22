@@ -10,7 +10,7 @@ An interrupt source is a device pipe with a handler descriptor bound to it at a
 priority. A write to that pipe makes the handler runnable, which (if it outranks
 the running job) preempts within one token boundary. The vector table is therefore
 just the table of (pipe → handler, priority) bindings -- one wake mechanism serving
-dataflow, tool completion, and interrupts alike (core §4.4).
+dataflow, tool completion, and interrupts alike (core §4.3).
 
 Storm control is the interesting part, and the policies are not interchangeable:
 

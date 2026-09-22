@@ -4,7 +4,7 @@ ZEOS is a transformer operating system: a deterministic kernel that schedules,
 protects, and pages LLM jobs. The design corpus is `docs/ProjectDescription/`;
 the module map and what-is-real-vs-simulated live in
 `docs/ProjectDescription/Implementation.md`. This file is the canonical agent
-instructions; `CLAUDE.md` is a symlink to it -- edit only this file.
+instructions; `CLAUDE.md` imports it -- edit only this file.
 
 ## Commands
 

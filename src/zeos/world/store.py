@@ -254,7 +254,7 @@ class WorldStore:
         self, read_set: ObjectSet, since: Clock, *, exclude_job: JobId | None = None
     ) -> tuple[StateDelta, ...]:
         """The RESUME diff: what this job depends on that changed while it was
-        suspended (core §6.2).
+        suspended (core §6.1).
 
         Collapses multiple writes to the same object into one delta spanning the
         whole suspension -- the model needs to know where the value *ended up* versus

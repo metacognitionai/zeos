@@ -1,0 +1,7 @@
+# Normalise on the way in, and check out LF everywhere.
+#
+# Without this, a clone on Windows follows `core.autocrlf`, which is on by default
+# there: the working tree gets CRLF and any file written back out carries it. Every
+# blob in this repository is LF already, so this changes nothing in the index -- it
+# stops a platform default from being the thing that decides.
+* text=auto eol=lf

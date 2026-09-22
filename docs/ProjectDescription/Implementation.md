@@ -25,7 +25,7 @@ maintained in the type system rather than in comments.
 | The seat's tokenisation | **Stand-in** -- whitespace, one word per decode; counts and boundaries only. The llama backend tokenises for real |
 | The seat's attention hint | **Synthetic** -- a guess about the job's own output; paging uses it, integrity does not (AM §11.4) |
 | Syscall ABI, parser, transcript rebuild, `MALFORMED` | **Real** -- one declaration renders the prose, the pattern and the grammar (AM §11) |
-| Sink pipes and `drain` | **Real** -- the outbound mirror of `deliver`, journalled as `pipe.drained` (core §4.5) |
+| Sink pipes and `drain` | **Real** -- the outbound mirror of `deliver`, journalled as `pipe.drained` (core §4.4) |
 | Provenance of content | **Real** -- each write in a pipe carries its writer's integrity; readers, vector payloads and world objects receive the worse of that and the pipe's ring (MP §4) |
 
 Nothing about eviction regret, θ-parameter sensitivity, or taint-creep rates can be
@@ -44,11 +44,18 @@ src/zeos/
 │   ├── ids.py               identifiers + cross-cutting enums (leaf: imports nothing)
 │   ├── serde.py             structural round-trip, hard failure on unserialisable
 │   ├── clock.py             two time bases, both injected
-│   ├── events.py            the 80-event journal alphabet
+│   ├── events.py            the journal alphabet
 │   ├── pcb.py               Job -- descriptor + transcript + metadata
 │   ├── scheduler.py         ready set, running job, suspension stack, inheritance
 │   ├── pipes.py             bounded buffers, blocking, select, backpressure
 │   ├── vectors.py           vector table, coalesce/queue/reentrant, throttling
+│   ├── framing.py           the kernel's frames around its own text          [MP]
+│   ├── principals.py        who is asking, and what they may cause           [NLI]
+│   ├── gates.py             action gates: the semantic check on the way out  [NLI]
+│   ├── resources.py         holdable resources: mutexes, semaphores, leases  [Fleet]
+│   ├── embodiment.py        platform profiles and embodiment requirements    [Fleet]
+│   ├── allocator.py         which body serves which task, and on what terms  [Fleet]
+│   ├── topology.py          nodes, object authority, the link                [Distributed]
 │   ├── segments.py          segment table, block alignment, masking          [MP]
 │   ├── integrity.py         Biba low-water-mark, θ_read                      [MP]
 │   ├── capabilities.py      capability table, schemas, rate limits           [MP]
@@ -56,7 +63,7 @@ src/zeos/
 │   ├── residency.py         eviction planner, stubs, thrash, admission       [VM]
 │   ├── pager.py             fault service, NEED routing, page-in placement   [VM]
 │   ├── faults.py            fault taxonomy, policy resolution, notice text
-│   └── kernel.py            the state machine -- tick(), ~1400 lines
+│   └── kernel.py            the state machine -- tick()
 ├── machine/
 │   ├── base.py              THE BACKEND SWAP POINT -- five ops + serving contract
 │   ├── scripted.py          scripted streams, blocks, synthetic attention
@@ -73,7 +80,7 @@ src/zeos/
 ├── journal/                 codec (byte-stable) + writer (streaming)
 ├── transport/               base.py (the seam), local.py, link.py (injected latency/loss)
 ├── world/store.py           namespaced state, read/write sets, resume diffs
-├── monitor/                 the journal folded into a picture of the system (`top`)
+├── monitor/                 the journal folded into a picture of the system (`inspect`)
 ├── debugger/                the same fold, drawn: wiring, scrubber, token stream
 │   ├── payload.py           case + journal -> one JSON object; pure, tested
 │   ├── server.py            page assembly; self-contained export, or a local server
@@ -81,10 +88,11 @@ src/zeos/
 ├── demo/                    problem/solution harness; no case ships here, see README
 │   ├── problem.py           Contract, Problem, conformance validation
 │   ├── solution.py          descriptor tree only
-│   ├── criteria.py          11 criterion kinds, journal-evaluated
+│   ├── criteria.py          criterion kinds, journal-evaluated
 │   ├── runner.py            bind → run → score
 │   └── harness.py           run_behaviour -- the unit tier, reusable
 ├── driver.py                ALL I/O and time, outside the core
+├── trace.py                 a machine's own account of each window, sampled beside the journal
 ├── federated.py             two kernels, one process: partition, restore, replicate
 └── cli.py                   lint / run / replay / inspect / debug / demo
 ```
@@ -162,8 +170,8 @@ class DecodeResult:
     at_block_boundary: bool
 ```
 
-A real backend populates `attention` and leaves `attention_hint` None.
-`ScriptedMachine` does the reverse. Splitting them in the type system is slightly
+A backend that can measure populates `attention` and leaves `attention_hint` None.
+`ScriptedMachine` and the llama.cpp machine do the reverse. Splitting them in the type system is slightly
 ugly, and the ugliness is the point: it marks exactly where the fiction lives so no
 policy claim can rest on it by accident.
 

@@ -131,6 +131,43 @@ def test_an_abi_must_be_well_formed() -> None:
         SyscallABI(verbs=(Verb("say"), Verb("SAY")))
     with pytest.raises(ValueError):
         SyscallABI(verbs=(Verb("say"),), terminator=" ")
+    with pytest.raises(ValueError):
+        SyscallABI(verbs=(Verb("start", OpKind.SPAWN, pipe=True, text=True),))
+
+
+# -- verbs that name a target rather than carrying a payload ----------------
+
+NAMING = SyscallABI(
+    verbs=(
+        Verb("start", OpKind.SPAWN, text=True, doc="start a child"),
+        Verb("want", OpKind.NEED, text=True, doc="ask for content"),
+        Verb("stop", OpKind.EXIT),
+    ),
+)
+
+
+def test_a_naming_verb_puts_its_argument_where_the_kernel_reads_it() -> None:
+    """The kernel resolves a spawn target from ``text``; a payload it cannot look up."""
+    request = NAMING.parse("start clear-bench;")
+    assert request.op is OpKind.SPAWN
+    assert request.text == "clear-bench"
+    assert request.payload == ()
+
+
+def test_a_naming_verb_keeps_a_multi_word_name_whole() -> None:
+    assert NAMING.parse("want maintenance log for pump 4;").text == "maintenance log for pump 4"
+
+
+def test_a_naming_verb_with_no_name_is_malformed() -> None:
+    """As a pipe verb with no pipe is: the command closed, and asks for nothing nameable."""
+    request = NAMING.parse("start;")
+    assert request.op is OpKind.MALFORMED
+    assert request.text == "start"
+
+
+def test_a_naming_verb_is_offered_a_name_in_the_prose() -> None:
+    assert "start <name>;" in NAMING.prose()
+    assert "<text>" not in NAMING.prose()
 
 
 # -- the parser -------------------------------------------------------------

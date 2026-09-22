@@ -128,7 +128,7 @@ of a ring, a capability or a priority.
 `decode()` samples one token and returns, so the kernel gets control back after every
 token. `Abstract-Machine.md` §6.1 requires this: one decode step is one scheduling
 quantum. It is what lets a handler preempt a running job between any two tokens, which
-§4.4 uses for interrupts.
+§4.3 uses for interrupts.
 
 Two more details of the backend show up later. llama keeps one logits buffer per context,
 so switching between jobs costs one extra forward pass to re-establish it. And llama's

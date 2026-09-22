@@ -8,7 +8,7 @@
 
 Faults are interrupts targeting the faulting job's ``on_fault`` policy -- the same
 mechanism as any other interrupt, so error handling is also just descriptors
-(core §6.3). Nothing here dispatches; this module decides *what should happen* and
+(core §6.2). Nothing here dispatches; this module decides *what should happen* and
 what the model should be told, and the kernel does it.
 
 Two rules from the specs shape this module:

@@ -226,7 +226,7 @@ class JobPreempted(Event):
 @dataclass(frozen=True)
 class JobResumed(Event):
     """Pop from the suspension stack. ``dirty`` is the computed intersection of the
-    job's read-set with the write-sets of everything that ran above it (core §6.2)."""
+    job's read-set with the write-sets of everything that ran above it (core §6.1)."""
 
     KIND: ClassVar[str] = "job.resumed"
 

@@ -31,6 +31,18 @@ job is popped and resumed -- with a kernel-inserted notice that the world has
 changed underneath it (the robot has moved, time has passed) so it revalidates
 its plan before continuing.
 
+### A note on "real-time"
+
+ZEOS borrows the RTOS vocabulary for its *scheduling model*, not for its
+*timing*. The kernel guarantees ordering and bounded response in **token
+boundaries**: the most urgent runnable job always dispatches next, and a
+preemption lands within one decode step. It does not yet guarantee response in
+wall-clock time. The kernel reads no clock; it is told the time by the driver,
+deadlines are detected after the fact as faults rather than enforced, and a
+decode step takes however long the model underneath takes. Wall-clock real-time
+behaviour depends on a serving stack with bounded per-step latency and resident
+pinned handlers, which is on the roadmap for this repository, and does not exist yet.
+
 ## 2. Core abstractions
 
 ### 2.1 Job
@@ -103,7 +115,7 @@ writes:                     # write-set: world state this job changes; named in 
   - workshop.inventory
 pipes:
   stdin:  user.commands     # blocking read source
-  stdout: user.reports      # replies: a sink pipe, drained for the user (§4.5)
+  stdout: user.reports      # replies: a sink pipe, drained for the user (§4.4)
   tools:  robot.actuators   # tool calls are writes here; results read back
 children:                   # sub-jobs this job may spawn (the hierarchy)
   - clear-bench
@@ -130,9 +142,11 @@ Notes:
   inherit or override priority), waits on their result pipes, and composes
   them. Writing a complex system = authoring this tree of descriptors.
 - **read/write sets** are declared over a namespaced world-state vocabulary.
-  They drive selective resume invalidation (§6) and resource locking. They are
-  declarations of *intent*; the kernel also accumulates an observed read-set
-  from what the job actually queried, and the union is used at resume time.
+  They drive selective resume invalidation (§6). They are declarations of
+  *intent*; the kernel also accumulates an observed read-set from the actuator
+  pipes the job actually read, and the union is used at resume time. A
+  load-time lint warns when two same-priority descriptors write the same
+  object.
 - **`preemptible: false`** is interrupt masking. It must be paired with a
   small token budget -- an unpreemptible job with a large budget is a design
   error the kernel rejects at load time.
@@ -154,16 +168,7 @@ Notes:
 - `select([pipes])` -- block until any of several pipes is readable. Needed for
   any job that serves multiple sources.
 
-### 4.2 Zero-copy pipes (same model)
-
-If producer and consumer run on the same model + weights, the pipe need not
-copy tokens: the consumer attends directly over the producer's KV segment
-(the RadixAttention/prefix-sharing mechanism, repurposed as shared-memory
-IPC). Cross-model pipes fall back to text copy. Same distinction as shared
-memory vs. sockets; the descriptor doesn't change, only the kernel's transport
-choice.
-
-### 4.3 Tool calls are pipe I/O
+### 4.2 Tool calls are pipe I/O
 
 A tool/actuator/API call is a write to a device pipe followed by a blocking
 read of the result pipe. Consequences:
@@ -177,7 +182,7 @@ read of the result pipe. Consequences:
   device cannot be parked: one that does not fit is refused to the driver and
   journalled as backpressure, never truncated.
 
-### 4.4 Interrupts are pipe writes
+### 4.3 Interrupts are pipe writes
 
 Unification: an interrupt source is a device pipe with a handler descriptor
 bound to it at high priority. A write to that pipe makes the handler runnable.
@@ -185,21 +190,22 @@ One wake mechanism serves dataflow, tool completion, and interrupts -- the
 interrupt vector table is just the table of (pipe → handler, priority)
 bindings.
 
-### 4.5 Three kinds of pipe
+### 4.4 Four kinds of pipe
 
 Every pipe is a bounded token buffer with the semantics of §4.1. Its
-declaration says which of three things it is for, and the difference is what
-happens on the way out:
+declaration says which of four things it is for, and the difference is what
+happens on the way in or out:
 
 | kind | declared by | written by | read by | what a write is |
 | --- | --- | --- | --- | --- |
 | ordinary | nothing extra | a job or a device | a job | a message: appended, read once, gone; received at the worse of the pipe's ring and the writer's integrity |
 | actuator | `world_object:` | a job or a device | nobody need read it | a value: latches, replacing what was there, and becomes world state at the writer's integrity |
 | sink | `sink: true` | a job | the driver | a history: appended, drained for the outside world |
+| front door | `utterance_source:` and `reply_to:` | a device | nobody; the kernel compiles it | an utterance: compiled into a job at the speaker's authority, or nothing; never landed as tokens |
 
-An **actuator** is the outbound half of §4.3: a write to it changes the
+An **actuator** is the outbound half of §4.2: a write to it changes the
 named world object, which is how one job's effect shows up in another job's
-resume diff (§6.2) and in a status region. A **sink** is the other outbound
+resume diff (§6.1) and in a status region. A **sink** is the other outbound
 kind: what a job writes there is for the world, not for another job, so the
 driver takes it out with `drain`, the mirror of `deliver`. The write was
 checked and journalled when it landed, so what leaves is only what the kernel
@@ -208,7 +214,10 @@ the full sink. A job that tries to read a sink raises a capability fault: a
 sink has no reader inside the system, by declaration.
 
 A device delivery is the inbound direction on an ordinary or actuator pipe,
-and is refused whole when it does not fit (§4.3).
+and is refused whole when it does not fit (§4.2). On a front door it is not a
+delivery at all: the text is compiled against the descriptors' declared
+utterances, the speaker named by the pipe is echoed what was understood on the
+reply pipe, and a job is spawned or nothing is.
 
 ## 5. Interrupts and preemption
 
@@ -226,7 +235,8 @@ and is refused whole when it does not fit (§4.3).
 
 The transformer's natural quantum is the **token boundary** (one forward pass,
 ~ms). Preemption is therefore truly preemptive -- no cooperation from the
-descriptor body -- with latency:
+descriptor body. As a rough napkin calculation, to give a sense of where the
+cost of an interrupt lands, its latency breaks down as:
 
 ```
 interrupt latency = (one token boundary)              ~ms
@@ -246,14 +256,18 @@ a separate system ZEOS does not implement.
 High-priority handler descriptors are **pinned**: prompt prefix pre-filled at
 load time, KV locked in HBM, never swapped. Dispatch cost is then only the
 event-payload prefill. This is the ISR-resident-in-RAM trick; HBM pinning
-budget is a first-class kernel resource.
+budget is a first-class kernel resource. The platform profile carries a field
+for it (`hbm_pin_budget`), but the kernel does not yet enforce it and it has
+not been exercised on a real platform.
 
 ### 5.4 Masking / critical sections
 
 `preemptible: false` sections defer interrupt dispatch until the section's
 token budget expires or it exits. Only for short atomic sequences
-(mid-multi-part actuation, mid-transaction). Kernel-enforced budget cap.
-Equivalent of `cli`/`sti` -- and just as dangerous, hence the cap.
+(mid-multi-part actuation, mid-transaction). The budget cap is
+kernel-enforced: the loader refuses a descriptor that sets
+`preemptible: false` with no token budget, or with one above a fixed limit,
+so a job can only mask interrupts for a short, bounded run.
 
 ### 5.5 Storms and re-entrancy
 
@@ -261,9 +275,9 @@ Equivalent of `cli`/`sti` -- and just as dangerous, hence the cap.
   handler dispatch that reads the latest value (level-triggered, not
   edge-triggered).
 - **Throttling**: `min_interval` per vector.
-- **Starvation control**: if a low-priority job is preempted more than K times
-  or starved beyond a deadline, raise a scheduler fault (visible event, not
-  silent aging -- real-time systems should fail loudly).
+- **Starvation control**: if a low-priority job is preempted more than K times,
+  raise a scheduler fault (visible event, not silent aging -- real-time systems
+  should fail loudly).
 - **Re-entrancy**: default `coalesce` or `queue`; `reentrant` only for
   handlers whose read/write sets are disjoint across instances. Under `queue`
   each firing's handler is handed the one write that fired it: a pipe remembers
@@ -272,21 +286,7 @@ Equivalent of `cli`/`sti` -- and just as dangerous, hence the cap.
 
 ## 6. Suspension, the stack, and resumption
 
-### 6.1 Context switch = KV paging
-
-Swap hierarchy for suspended jobs:
-
-```
-GPU HBM -- running + pinned handlers
-CPU RAM -- shallow-suspended (recently preempted; likely to resume soon)
-Disk -- deep-suspended (bottom of stack, long-lived goals)
-```
-
-Swap-vs-recompute per job decided by context length, depth on the stack, and
-priority (the vLLM tradeoff). Cross-model resume always recomputes from
-transcript.
-
-### 6.2 Resumption is not transparent -- the one genuinely new problem
+### 6.1 Resumption is not transparent -- the one genuinely new problem
 
 A classical OS restores registers and the process never knows it was gone.
 A ZEOS job's saved state contains **beliefs about the world**, and the world
@@ -295,8 +295,9 @@ beliefs that the model will keep attending to*.
 
 Protocol on resume:
 
-1. Kernel computes `dirty = read_set(job) ∩ ⋃ write_set(everything that ran above it)`
-   (declared ∪ observed sets on both sides).
+1. Kernel computes `dirty = read_set(job) ∩ writes(everything that ran above it)`:
+   the job's declared ∪ observed read-set, against the writes actually recorded
+   in world state while it was away.
 2. `dirty = ∅` → resume silently. The job's beliefs are exactly as it left
    them, so it is told nothing; the journal still records the resume and its
    duration. A notice whose whole content is "nothing changed" is not
@@ -304,26 +305,26 @@ Protocol on resume:
 3. `dirty ≠ ∅` → append `<RESUME>` **carrying the diff**, e.g.:
 
    ```
-   <RESUME>
-   Suspended 94s. While suspended: handler 'smoke-response' ran.
-   Changed state you depend on:
-     robot.position: bench-3 → doorway
-     workshop.inventory: unchanged? NO -- extinguisher removed from wall
-   Revalidate your current plan step before acting.
-   </RESUME>
+   <RESUME> Suspended 1m34s. Changed state you depend on:
+     robot.position: bench-3 -> doorway
+     workshop.inventory: extinguisher:wall -> extinguisher:wall (extinguisher removed from wall)
+   Revalidate your current plan step before acting. </RESUME>
    ```
+
+   The kernel emits this as a single line; it is broken up here for reading.
 
    A bare flag is not enough -- the diff must be salient enough to override
    stale in-context state. There is exactly one resume notice, and its presence
    means something changed.
 
-This is TLB-shootdown logic: invalidate only the lines that were touched.
+Only the state the job depends on that actually changed is reported, not
+everything.
 
 An open question, testable in isolation: do current models reliably let a
 `RESUME` notice override earlier in-context world state, or does this
 need training?
 
-### 6.3 Stack discipline
+### 6.2 Stack discipline
 
 - Resume order is LIFO by default (interrupt semantics).
 - A handler may instead **cancel** jobs below it (the emergency invalidated
@@ -348,7 +349,7 @@ States: `READY`, `RUNNING`, `BLOCKED` (on pipe read/write), `SUSPENDED`
              BLOCKED ◀───── read empty pipe / write full ────┘ │ │
                                                                │ │
               SUSPENDED ◀──── preempted by higher priority ────┘ │
-                │  (pushed on stack; KV paged per §6.1)          │
+                │  (pushed on stack)                             │
                 │ pop (LIFO) + RESUME when dirty                 │
                 └────────────────▶ READY                        │
                                                                 │
@@ -402,18 +403,12 @@ So the kernel's entire instruction set over a context is five operations:
 
 Given the machine model of Appendix B, interrupts become straightforward. A model
 can be interrupted at a token boundary safely for high-priority event handlers.
-The following mechanisms can be used to inject the return state of an interrupt
-into a task/turn.
+The kernel uses two mechanisms to inject the return state of an interrupt
+into a job's context.
 
-- **Flags.** The interrupt sets a flag in the job's bookkeeping state and waits
-  for the agent to query the flag. Context is unaffected.
-- **Sampler bias.** The LLM sampler is changed to nudge token probabilities
-  towards some outcome (e.g. "check messages").
 - **Status region.** Small section within the context window that can be
-  rewritten in place.
-- **Append.** Insert a message at the next block boundary. Wrap in start
-  `<MESSAGE>` and end `</MESSAGE>` tags. The start tag can optionally include an
-  identifier. Multiple messages may be appended if they have accumulated between
-  suspension and resumption of a job.
-- **Preempt.** Terminate the current iteration and insert the message
-  immediately.
+  rewritten in place: `<STATUS obj> value </STATUS>`.
+- **Append.** Insert a message at the next token boundary. The quantum is one
+  token, so this is also the earliest possible moment; there is no separate
+  "preempt and insert immediately". The resume notice of §6.1 is this
+  mechanism, wrapped in `<RESUME>` and `</RESUME>` tags.
