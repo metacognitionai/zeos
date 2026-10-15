@@ -37,7 +37,7 @@ from zeos_coop_count.grammar import build_grammar
 
 __all__ = ["LlamaModel", "LlamaMachine", "PAD_TOKEN", "DEFAULT_BLOCK_SIZE"]
 
-#: Reserved no-op used for block padding, marked CONTROL so a job cannot emit it.
+#: Block padding, marked CONTROL so a job cannot emit it; it occupies no llama id.
 PAD_TOKEN = Token("<pad>", TokenKind.CONTROL)
 
 DEFAULT_BLOCK_SIZE = 16
@@ -208,7 +208,8 @@ class LlamaMachine(SyscallSeat):
 
     @staticmethod
     def _choose_pad(model: LlamaModel) -> int:
-        """Pick the id block padding is made of, preferring a newline because it reads as text."""
+        """Pick the reserved id the sampler may never select, which also stands in for a
+        kernel token whose text tokenises to nothing."""
         newline = model.tokenize("\n", add_bos=False)
         if len(newline) == 1:
             return newline[0]
@@ -383,9 +384,12 @@ class LlamaMachine(SyscallSeat):
         self._flush(ctx, want_logits=True)
 
     def _encode(
-        self, tokens: Sequence[Token], ctx: _Context
+        self, tokens: Sequence[Token], ctx: _Context, *, lead: str = " "
     ) -> tuple[list[Token], list[int], list[int]]:
-        """Turn kernel tokens into ids and spans, splitting runs where the token kind changes."""
+        """Turn kernel tokens into ids and spans, splitting runs where the token kind changes.
+
+        ``lead`` is what separates the first word from whatever the model read before it.
+        """
         out_tokens: list[Token] = []
         out_ids: list[int] = []
         out_spans: list[int] = []
@@ -398,8 +402,18 @@ class LlamaMachine(SyscallSeat):
                 j += 1
             run = tokens[i:j]
             for k, tok in enumerate(run):
+                # Padding keeps its kernel slot but the model never reads it.
+                if tok == PAD_TOKEN:
+                    out_tokens.append(tok)
+                    out_spans.append(0)
+                    continue
                 # A leading space marks a word boundary, which the very first token lacks.
-                text = tok.text if (first and i == 0 and k == 0) else " " + tok.text
+                if first and i == 0 and k == 0:
+                    text = tok.text
+                elif not out_tokens:
+                    text = lead + tok.text
+                else:
+                    text = " " + tok.text
                 ids = self._model.tokenize(text, add_bos=(first and i == 0 and k == 0))
                 if not ids:
                     ids = [self._pad_id]
@@ -461,7 +475,10 @@ class LlamaMachine(SyscallSeat):
         ctx = self._ctx_of(job)
         start = len(ctx.tokens)
         first = not ctx.tokens
-        new_tokens, new_ids, new_spans = self._encode(tokens, ctx)
+        # An arrival opens the sender's turn or starts a new line in it, so what the model
+        # reads does not depend on the padding the kernel put before it.
+        lead = "" if (first or ctx.turn_open) else "\n"
+        new_tokens, new_ids, new_spans = self._encode(tokens, ctx, lead=lead)
         ctx.extend(new_tokens, new_ids, new_spans)
         # An arrival lands mid-flight when the model's turn is open; anything before that
         # is still the prompt being put together.
@@ -578,7 +595,7 @@ class LlamaMachine(SyscallSeat):
         if remainder == 0:
             return 0
         padding = self._block_size - remainder
-        ctx.extend([PAD_TOKEN] * padding, [self._pad_id] * padding, [1] * padding)
+        ctx.extend([PAD_TOKEN] * padding, [], [0] * padding)
         return padding
 
     def blocks_for_range(self, job: JobId, start: int, end: int) -> frozenset[int]:
