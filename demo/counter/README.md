@@ -47,13 +47,12 @@ it. All four seats will hopefully (due to non-determinism) have the same output:
   t0    machine.inject job=1 segment=1 pipe=kernel principal=kernel ring=1 integrity=1 tokens=18 text=[18 items]
   t0    segment.opened job=1 segment=1 ring=1 integrity=1 perms=Perm.R|X|P
   t0    segment.closed job=1 segment=1 end=18
-  t0    mask.updated job=1 allowed_blocks=2
+  t0    mask.updated job=1 allowed_blocks=3
   t1    machine.block_boundary job=1 block=1 padding_tokens=14
   t1    machine.decode job=1 segment=2 tokens=1 text=one
   t1      decoded "one"
-  t1    mask.denied job=1 segment=2
   t1    machine.block_boundary job=1 block=2
-  t1    vm.working_set job=1 size_tokens=18 segments=1
+  t1    vm.working_set job=1 size_tokens=19 segments=2
   t1    mask.updated job=1 allowed_blocks=3
   t2    machine.decode job=1 segment=2 tokens=1 text=two
   t2      decoded "two"
@@ -71,13 +70,12 @@ it. All four seats will hopefully (due to non-determinism) have the same output:
   t8    machine.inject job=2 segment=3 pipe=kernel principal=kernel ring=1 integrity=1 tokens=18 text=[18 items]
   t8    segment.opened job=2 segment=3 ring=1 integrity=1 perms=Perm.R|X|P
   t8    segment.closed job=2 segment=3 end=18
-  t8    mask.updated job=2 allowed_blocks=2
+  t8    mask.updated job=2 allowed_blocks=3
   t9    machine.block_boundary job=2 block=1 padding_tokens=14
   t9    machine.decode job=2 segment=4 tokens=1 text=one
   t9      decoded "one"
-  t9    mask.denied job=2 segment=4
   t9    machine.block_boundary job=2 block=2
-  t9    vm.working_set job=2 size_tokens=18 segments=1
+  t9    vm.working_set job=2 size_tokens=19 segments=2
   t9    mask.updated job=2 allowed_blocks=3
   t10   machine.decode job=2 segment=4 tokens=1 text=two
   t10     decoded "two"

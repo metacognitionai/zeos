@@ -106,11 +106,10 @@ def test_the_trace_contains_the_expected_landmarks(tmp_path: Path) -> None:
     Demotion is pinned in the contract tier instead, where a behaviour reads an
     external feed and its final integrity is asserted.
 
-    ``AttentionDenied`` is on the list because of how it nearly left it. Rewording the
-    fixture's prose changed its token counts, the masking bookkeeping moved with them,
-    and the count went to zero -- caught only by the digest, because no test named the
-    mechanism. A digest tells you something moved; it does not tell you that a
-    protection stopped being exercised. So the mechanism is named here now.
+    ``AttentionDenied`` is not among them either: nothing in this fixture is unreadable,
+    so the denials its trace once carried were the mask lagging the job's own fresh
+    output, not a protection being exercised. The mechanism is pinned in the stage C
+    tests, where a compartment child is denied its parent's blocks.
     """
     kinds = run(tmp_path / "run.jsonl")
     for landmark in (
@@ -120,6 +119,5 @@ def test_the_trace_contains_the_expected_landmarks(tmp_path: Path) -> None:
         "CapabilityChecked",
         "WorldWritten",
         "MaskUpdated",
-        "AttentionDenied",
     ):
         assert landmark in kinds, f"expected {landmark} in the trace"

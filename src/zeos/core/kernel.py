@@ -1033,6 +1033,14 @@ class Kernel:
     def _current_block(self, job: Job) -> int:
         return self.machine.stats(job.job_id).resident_tokens // self.machine.block_size
 
+    def _next_block(self, job: Job) -> int:
+        """The block the job's next token lands in: the current one while output is
+        open, else the edge ``_ensure_output_segment`` pads up to."""
+        resident = self.machine.stats(job.job_id).resident_tokens
+        if job.segments.open_segment is not None:
+            return resident // self.machine.block_size
+        return padded_to_block(resident, self.machine.block_size) // self.machine.block_size
+
     def _inject(
         self,
         job: Job,
@@ -1397,8 +1405,13 @@ class Kernel:
         self._refresh_mask(job)
 
     def _refresh_mask(self, job: Job) -> None:
-        """Install the allowed-block bitmap -- the MMU."""
-        allowed = job.segments.allowed_blocks()
+        """Install the allowed-block bitmap -- the MMU.
+
+        The block the job writes next is allowed along with the readable records: no
+        record covers it until the first token lands, and the mask is not refreshed
+        again until the next boundary.
+        """
+        allowed = job.segments.allowed_blocks() | {self._next_block(job)}
         self.machine.set_mask(job.job_id, allowed)
         denied = job.segments.denied_blocks()
         self._emit(
