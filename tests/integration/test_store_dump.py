@@ -63,7 +63,7 @@ def rebuilt_from_journal(events: list[Event]) -> dict[str, tuple[list[str], int]
             region = next(r for r in window["regions"] if r["segment"] == start)
             removed[job, stop] = list(region["text"])
         elif row[1] == "stub":
-            _, _, job, stub, _evicted, store_id = row
+            _, _, job, stub, _evicted, store_id, _size = row
             text, refs = store.get(store_id, (removed[job, stub], 0))
             store[store_id] = (text, refs + 1)
     return store

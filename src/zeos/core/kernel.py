@@ -181,6 +181,7 @@ from zeos.core.residency import (
     EvictionCandidate,
     ThrashMonitor,
     admission_check,
+    padded_to_block,
     plan_eviction,
     render_stub,
     stub_size,
@@ -202,6 +203,7 @@ from zeos.core.topology import LINK_STATE, LinkPort, Topology
 from zeos.core.vectors import VectorAction, VectorTable
 from zeos.descriptor.schema import CompartmentSpec, Descriptor
 from zeos.machine.base import (
+    PAD_TOKEN,
     AttentionHint,
     DecodeResult,
     MachineBackend,
@@ -624,6 +626,7 @@ class Kernel:
         child.current_integrity = spec.integrity
         child.compartment_of = parent.job_id
 
+        self._close_and_pad(parent)
         shared = self.machine.fork(parent.job_id, child.job_id)
         parent.segments.fork_into(child.segments)
         granted = tuple(record.id for tag in spec.grants for record in child.segments.by_tag(tag))
@@ -1012,6 +1015,9 @@ class Kernel:
         cannot accidentally mask part of its neighbour.
         """
         job.segments.close_open(integrity=job.current_integrity)
+        self._pad_to_block(job)
+
+    def _pad_to_block(self, job: Job) -> None:
         padding = self.machine.pad_to_block(job.job_id)
         if padding:
             self.clock = self.clock.tick_tokens(padding)
@@ -1216,6 +1222,7 @@ class Kernel:
         """
         if job.segments.open_segment is not None:
             return
+        self._pad_to_block(job)
         job.segments.open_output(
             self._next_segment(),
             at=self.machine.stats(job.job_id).resident_tokens,
@@ -1367,14 +1374,22 @@ class Kernel:
                         theta_read=self.config.theta_read,
                     ),
                 )
-        # Close the output segment at the boundary. The kernel closes output
-        # at *every* scheduling boundary event -- any INJECT, any returning pipe read,
-        # any preemption, and any block-boundary refresh. Omitting the last case
-        # leaves a job that only ever generates with a single unbounded OPEN
-        # segment, which is both wrong for provenance ("generated between which
-        # events?") and fatal for eviction, since an open segment is never a
-        # candidate.
-        job.segments.close_open(integrity=job.current_integrity)
+        # Split the open output at the edge this step crossed, so the tokens before
+        # it close as one record and the rest continue in a new one, or close it
+        # there when the step ended on the edge; output that opened on the edge is
+        # left open.
+        edge = block * self.machine.block_size
+        open_segment = job.segments.open_segment
+        if open_segment is not None and open_segment.start < edge:
+            if open_segment.end == edge:
+                job.segments.close_open(integrity=job.current_integrity)
+            else:
+                job.segments.split_open(
+                    edge,
+                    self._next_segment(),
+                    integrity=job.current_integrity,
+                    token_clock=self.clock.token_clock,
+                )
 
         job.thrash.note_block()
         self._sample_working_set(job)
@@ -3210,13 +3225,18 @@ class Kernel:
         summary = summarise(tokens, budget=summary_budget)
         stub_text = render_stub(record, summary, store_id=span.store_id)
         stub_tokens = tokens_from_text(stub_text, TokenKind.CONTROL)
+        padded = padded_to_block(len(stub_tokens), self.machine.block_size)
+        replacement = (*stub_tokens, *([PAD_TOKEN] * (padded - len(stub_tokens))))
 
-        splice = self.machine.splice(job.job_id, record.start, record.end, stub_tokens)
+        extent_end = job.segments.extent_end(record.id)
+        extent = extent_end - record.start
+        splice = self.machine.splice(job.job_id, record.start, extent_end, replacement)
         stub_id = self._next_segment()
         job.segments.evict_to_stub(
             record.id,
             stub_id,
             stub_tokens=len(stub_tokens),
+            padded_tokens=padded,
             token_clock=self.clock.token_clock,
         )
         self._emit(
@@ -3226,7 +3246,7 @@ class Kernel:
                 start_segment=record.id,
                 end_segment=stub_id,
                 tokens_in=splice.tokens_in,
-                tokens_out=record.tokens,
+                tokens_out=extent,
                 invalidated_downstream_tokens=splice.invalidated_downstream,
             )
         )
@@ -3237,7 +3257,7 @@ class Kernel:
                 segment=record.id,
                 stub=stub_id,
                 store=span.store_id,
-                freed_tokens=record.tokens - len(stub_tokens),
+                freed_tokens=extent - padded,
                 stub_tokens=len(stub_tokens),
                 policy=job.descriptor.context.eviction.value,
             )
@@ -3257,7 +3277,7 @@ class Kernel:
                 store_id=span.store_id,
                 stub=stub_id,
                 evicted_at_block=job.last_block,
-                freed_tokens=record.tokens - len(stub_tokens),
+                freed_tokens=extent - padded,
                 stub_tokens=len(stub_tokens),
                 owner=job.job_id,
             )
@@ -3466,7 +3486,8 @@ class Kernel:
             # Measured before any padding: ``_inject`` pads to a block boundary, and
             # padding lands *after* this region, so closing first would manufacture
             # the very downstream extent being weighed.
-            downstream = self.machine.stats(job.job_id).resident_tokens - record.end
+            extent_end = job.segments.extent_end(record.id)
+            downstream = self.machine.stats(job.job_id).resident_tokens - extent_end
             budget = job.descriptor.context.retract_recompute_ratio * record.tokens
             if record.is_closed and downstream <= budget:
                 self._retract_status_region(job, record, obj)
@@ -3485,7 +3506,8 @@ class Kernel:
                 )
 
     def _retract_status_region(self, job: Job, record: SegmentRecord, obj: ObjectName) -> None:
-        splice = self.machine.splice(job.job_id, record.start, record.end, ())
+        extent_end = job.segments.extent_end(record.id)
+        splice = self.machine.splice(job.job_id, record.start, extent_end, ())
         freed = job.segments.retract(record.id)
         self._emit(
             Spliced(

@@ -45,6 +45,7 @@ __all__ = [
     "plan_eviction",
     "render_stub",
     "stub_size",
+    "padded_to_block",
     "STUB_FRAMING_TOKENS",
     "working_set_tokens",
     "ThrashMonitor",
@@ -192,6 +193,12 @@ def stub_size(span_tokens: int) -> tuple[int, int]:
 STUB_FRAMING_TOKENS = stub_size(64)[0] - stub_size(64)[1]
 
 
+def padded_to_block(tokens: int, block_size: int) -> int:
+    """The window a stub of ``tokens`` occupies: the executor pads it to whole blocks
+    so the records after it stay block-aligned, and the planner must charge the same."""
+    return tokens + (-tokens % block_size)
+
+
 def plan_eviction(
     table: SegmentTable,
     policy: ContextPolicy,
@@ -238,7 +245,8 @@ def plan_eviction(
         if projected <= policy.low_mark:
             break
         stub_tokens, _ = stub_size(record.tokens)
-        freed = record.tokens - stub_tokens
+        extent = table.extent_end(record.id) - record.start
+        freed = extent - padded_to_block(stub_tokens, table.block_size)
         if record.id in originals:
             skipped.append(
                 EvictionCandidate(

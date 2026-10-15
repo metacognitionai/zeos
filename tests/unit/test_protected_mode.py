@@ -138,7 +138,7 @@ def test_retract_refuses_a_span_that_is_not_resident_or_still_open() -> None:
     with pytest.raises(RuntimeError, match="still open"):
         table.retract(SegmentId(3))
 
-    table.evict_to_stub(SegmentId(2), SegmentId(4), stub_tokens=4, token_clock=16)
+    table.evict_to_stub(SegmentId(2), SegmentId(4), stub_tokens=4, padded_tokens=4, token_clock=16)
     with pytest.raises(RuntimeError, match="not resident"):
         table.retract(SegmentId(2))
 
