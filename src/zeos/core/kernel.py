@@ -385,8 +385,14 @@ class Kernel:
                 file=sys.stderr,
             )
 
-    def _transition(self, job: Job, to: JobState) -> None:
-        before = job.state
+    def _transition(self, job: Job, to: JobState, *, was: JobState | None = None) -> None:
+        """Move a job to ``to`` and journal it.
+
+        ``was`` is for a caller whose scheduler call has already set the new state --
+        ``block``, ``wake`` and ``preempt`` all do -- so the job's own state no longer
+        says where it came from, and without it the move would go unrecorded.
+        """
+        before = job.state if was is None else was
         if before is to:
             return
         job.state = to
@@ -925,6 +931,7 @@ class Kernel:
         if suspended is not None and (ready is None or not ready.outranks(suspended)):
             resumed = self.sched.pop_suspended()
             if resumed is not None:
+                self._transition(resumed, JobState.READY, was=JobState.SUSPENDED)
                 self._dispatch(resumed)
                 return
         if ready is not None:
@@ -1757,7 +1764,7 @@ class Kernel:
         if job.state is JobState.RUNNING:
             self.sched.preempt(job)
             job.suspended_at = self.clock
-            self._transition(job, JobState.SUSPENDED)
+            self._transition(job, JobState.SUSPENDED, was=JobState.RUNNING)
         elif job.state is JobState.READY:
             job.suspended_at = self.clock
 
@@ -1805,7 +1812,7 @@ class Kernel:
                     # stopped waiting on it -- and went on outranking that job's peers
                     # on the strength of it.
                     self._release_priority_inheritance(waiter)
-                    self._transition(waiter, JobState.READY)
+                    self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
 
     def withdraw_platform(self, platform: str, *, reason: str) -> Job | None:
         """A body leaves the fleet -- flat battery, fault, or maintenance.
@@ -1836,7 +1843,7 @@ class Kernel:
             waiter = self.sched.get(waiter_id)
             waiter.pending_acquire = None
             if self.sched.wake(waiter):
-                self._transition(waiter, JobState.READY)
+                self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
         return holder
 
     # -- natural language (ZEOS-NLI) ------------------------------------------
@@ -2372,7 +2379,7 @@ class Kernel:
                 if job.state is JobState.RUNNING:
                     self.sched.preempt(job)
                     job.suspended_at = self.clock
-                    self._transition(job, JobState.SUSPENDED)
+                    self._transition(job, JobState.SUSPENDED, was=JobState.RUNNING)
 
     # -- resources -----------------------------------------------------------
 
@@ -2474,7 +2481,7 @@ class Kernel:
         job.pending_acquire = name
         self._block(job)
         job.blocked_reason = "resource"
-        self._transition(job, JobState.BLOCKED)
+        self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
         self._emit(
             ResourceBlocked(
                 clock=self.clock,
@@ -2503,7 +2510,7 @@ class Kernel:
             resource.drop_waiter(candidate)
             if self.sched.wake(waiter):
                 woken = candidate
-                self._transition(waiter, JobState.READY)
+                self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
         self._emit(ResourceReleased(clock=self.clock, job=job.job_id, resource=name, woke=woken))
 
     def _return_body(self, job: Job, *, reason: str) -> None:
@@ -2934,7 +2941,7 @@ class Kernel:
             self._block(job)
             job.blocked_on = gate.pipe
             job.blocked_reason = "gate-queue"
-            self._transition(job, JobState.BLOCKED)
+            self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
             self._emit(
                 JobBlocked(
                     clock=self.clock, job=job.job_id, pipe=gate.requests, reason="gate-queue"
@@ -2956,7 +2963,7 @@ class Kernel:
         self._block(job)
         job.blocked_on = gate.pipe
         job.blocked_reason = "gate"
-        self._transition(job, JobState.BLOCKED)
+        self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
         self._emit(
             GateConsulted(
                 clock=self.clock,
@@ -3092,7 +3099,7 @@ class Kernel:
         if not allowed:
             job.pending_write = None
             if self.sched.wake(job):
-                self._transition(job, JobState.READY)
+                self._transition(job, JobState.READY, was=JobState.BLOCKED)
             self._raise_fault(
                 job,
                 Fault(
@@ -3109,7 +3116,7 @@ class Kernel:
         # Allowed: the held write is retried through the ordinary path on wake.
         job.gate_cleared = gate.pipe
         if self.sched.wake(job):
-            self._transition(job, JobState.READY)
+            self._transition(job, JobState.READY, was=JobState.BLOCKED)
         self._emit(JobWoken(clock=self.clock, job=job.job_id, pipe=gate.pipe))
 
     def _do_select(self, job: Job, pipe_names: tuple[PipeName, ...]) -> None:
@@ -3145,7 +3152,7 @@ class Kernel:
             if not pipe.writable(len(tokens)):
                 pipe.block_writer(job.job_id)
                 self._block(job)
-                self._transition(job, JobState.BLOCKED)
+                self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
                 return True
             job.pending_write = None
             self._do_write(job, pipe_name, tokens, then_read=then_read)
