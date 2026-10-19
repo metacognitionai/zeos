@@ -1664,9 +1664,10 @@ class Kernel:
         # ``self.*`` is what a re-embodiment diff is made of, so it has to
         # exist and be written by the kernel on every embodiment change.
         previous = {k: self.world.get(ObjectName(k)) for k in self_state(profile)}
+        changed_body = previous.get("self.platform") != profile.name
         for key, value in sorted(self_state(profile).items()):
             note = ""
-            if previous.get(key) and previous[key] == value and key == "self.tooling":
+            if changed_body and previous.get(key) == value and key == "self.tooling":
                 # Nominally the same tooling on a different body is exactly the case
                 # a value cannot express: same gripper, different offsets.
                 note = "recalibrated on a new body; offsets differ"
