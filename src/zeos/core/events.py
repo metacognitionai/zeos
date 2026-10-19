@@ -911,6 +911,22 @@ class WorldWritten(Event):
     after: str
 
 
+@event_class
+@dataclass(frozen=True)
+class ReportAttributed(Event):
+    """A device's report on an actuator is the effect of a job's own command.
+
+    The ``pipe.written`` that follows carries no job, because the device wrote it; the
+    ``world.written`` carries ``job``, because that job caused it. The attribution
+    keeps the change out of that job's own resume diff and in everyone else's.
+    """
+
+    KIND: ClassVar[str] = "world.report_attributed"
+
+    pipe: PipeName
+    job: JobId
+
+
 # ---------------------------------------------------------------------------
 # Faults
 # ---------------------------------------------------------------------------

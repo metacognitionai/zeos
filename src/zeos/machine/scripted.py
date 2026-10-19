@@ -40,6 +40,7 @@ from typing import Any, cast
 
 from zeos.core.ids import JobId, PipeName, SegmentId, TokenKind
 from zeos.machine.base import (
+    PAD_TOKEN,
     AttentionHint,
     ContextStats,
     ControlTokenViolation,
@@ -54,9 +55,6 @@ from zeos.machine.base import (
 )
 
 __all__ = ["Step", "Script", "ScriptedMachine", "PAD_TOKEN", "ScriptExhausted"]
-
-#: Reserved no-op token used for block padding.
-PAD_TOKEN = Token("<pad>", TokenKind.CONTROL)
 
 DEFAULT_BLOCK_SIZE = 16
 

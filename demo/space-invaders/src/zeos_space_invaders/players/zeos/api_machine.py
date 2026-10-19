@@ -860,7 +860,7 @@ class APIMachineBase(SyscallSeat):
         else:
             self._cancel(ctx)
         ctx.tokens[start:end] = list(tokens)
-        ctx.origin[start:end] = [IN] * len(tokens)
+        ctx.origin[start:end] = [PAD if token == PAD_TOKEN else IN for token in tokens]
         return SpliceResult(tokens_in=len(tokens), invalidated_downstream=downstream)
 
     # -- the serving-stack contract ------------------------------------------

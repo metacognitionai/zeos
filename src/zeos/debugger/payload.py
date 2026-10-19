@@ -52,6 +52,7 @@ from zeos.core.events import (
     Decoded,
     Forked,
     Injected,
+    KernelStarted,
     PermsChanged,
     PipeReadEvent,
     PipeWritten,
@@ -469,9 +470,10 @@ def _token_log(records: Sequence[JournalRecord], *, every: int, count: int) -> l
 CONTEXT_OPS: Mapping[str, str] = {
     "inject": "a segment of foreign tokens appended, with its provenance",
     "decode": "tokens the job generated, appended to its open output segment",
+    "edge": "a block edge the job crossed; open output straddling it is split there",
     "pad": "filler to the next block boundary, owned by no segment",
     "splice": "a segment replaced in place by a stub, or removed outright",
-    "stub": "which evicted segment a stub stands for, and where its content went",
+    "stub": "which evicted segment a stub stands for, its size, and where its content went",
     "fork": "a child's window opening as a copy of its parent's",
     "perms": "a segment's permission bits, set when it opened or revoked later",
 }
@@ -486,9 +488,12 @@ def _context_log(records: Sequence[JournalRecord], *, every: int, count: int) ->
     in front of them and takes their frame.
     """
     log: list[list[Any]] = []
+    block_size = 0
     for index, record in enumerate(records):
         frame = _frame_of(index, every=every, count=count)
         match record.event:
+            case KernelStarted() as e:
+                block_size = e.block_size
             case Injected() as e:
                 job, seg = int(e.job), int(e.segment)
                 row = [frame, "inject", job, seg, str(e.pipe), int(e.ring), int(e.integrity)]
@@ -501,11 +506,16 @@ def _context_log(records: Sequence[JournalRecord], *, every: int, count: int) ->
                 log.append([frame, "decode", int(e.job), int(e.segment), list(e.text)])
             case BlockBoundary() as e if e.padding_tokens:
                 log.append([frame, "pad", int(e.job), e.padding_tokens])
+            case BlockBoundary() as e:
+                if not block_size:
+                    raise ValueError("a block boundary before kernel.started")
+                log.append([frame, "edge", int(e.job), e.block * block_size])
             case Spliced() as e:
                 job, start, stop = int(e.job), int(e.start_segment), int(e.end_segment)
                 log.append([frame, "splice", job, start, stop, e.tokens_in, e.tokens_out])
             case SegmentEvicted() as e:
-                log.append([frame, "stub", int(e.job), int(e.stub), int(e.segment), str(e.store)])
+                stub = [int(e.stub), int(e.segment), str(e.store), e.stub_tokens]
+                log.append([frame, "stub", int(e.job), *stub])
             case Forked() as e:
                 child, at = int(e.child), len(log)
                 while at and log[at - 1][1] == "perms" and log[at - 1][2] == child:
@@ -549,13 +559,19 @@ def replay_context(log: Sequence[Sequence[Any]], *, upto: int | None = None) -> 
     one it holds without owning (``pad`` filler, or a ``stub`` for an evicted segment).
     The journal carries text for the first two and only a size for the last two.
 
+    A decode is journalled against the segment it began in; when it crosses a block
+    edge the kernel closes that segment at the edge and continues in a new one, whose
+    id the next decode names. A splice takes a segment's whole extent, the padding
+    after it included, and a stub arrives padded to whole blocks.
+
     Rows, after ``[frame, op]``::
 
         inject  job, segment, pipe, ring, integrity, text
         decode  job, segment, text
+        edge    job, offset
         pad     job, count
         splice  job, start_segment, end_segment, tokens_in, tokens_out
-        stub    job, stub_segment, evicted_segment, store
+        stub    job, stub_segment, evicted_segment, store, stub_tokens
         fork    child, parent
         perms   job, segment, perms
     """
@@ -578,30 +594,56 @@ def replay_context(log: Sequence[Sequence[Any]], *, upto: int | None = None) -> 
                 held["tokens"] += len(text)
             case "decode":
                 _, _, _, segment, text = row
+                regions = held["regions"]
                 try:
                     region = _region(held, segment)
                 except KeyError:
-                    region = _blank_region("output", segment, 0)
-                    held["regions"].append(region)
+                    last = regions[-1] if regions else None
+                    if last and last["kind"] == "output" and last["segment"] is None:
+                        region = last
+                        region["segment"] = segment
+                    else:
+                        region = _blank_region("output", segment, 0)
+                        regions.append(region)
                 region["text"].extend(text)
                 region["count"] += len(text)
                 held["tokens"] += len(text)
+            case "edge":
+                regions = held["regions"]
+                last = regions[-1] if regions else None
+                start = held["tokens"] - (last["count"] if last else 0)
+                if last and last["kind"] == "output" and start < row[3] < held["tokens"]:
+                    keep = row[3] - start
+                    tail = _blank_region("output", None, last["count"] - keep)
+                    tail["text"] = last["text"][keep:]
+                    last["text"] = last["text"][:keep]
+                    last["count"] = keep
+                    regions.append(tail)
             case "pad":
                 held["regions"].append(_blank_region("pad", None, row[3]))
                 held["tokens"] += row[3]
             case "splice":
-                _, _, _, start, stop, tokens_in, _tokens_out = row
+                _, _, _, start, stop, tokens_in, tokens_out = row
                 regions = held["regions"]
                 index = regions.index(_region(held, start))
-                held["tokens"] -= regions[index]["count"]
+                removed = 0
+                while removed < tokens_out:
+                    removed += regions.pop(index)["count"]
+                if removed != tokens_out:
+                    raise ValueError(f"splice of {tokens_out} tokens cut a region of job {job}")
+                held["tokens"] -= removed
                 if tokens_in:
-                    regions[index] = _blank_region("stub", stop, tokens_in)
+                    regions.insert(index, _blank_region("stub", stop, tokens_in))
                     held["tokens"] += tokens_in
-                else:
-                    del regions[index]
             case "stub":
-                _, _, _, stub, evicted, store = row
-                _region(held, stub).update(stub_of=evicted, store=store)
+                _, _, _, stub, evicted, store, size = row
+                region = _region(held, stub)
+                region.update(stub_of=evicted, store=store)
+                if region["count"] > size:
+                    regions = held["regions"]
+                    pad = _blank_region("pad", None, region["count"] - size)
+                    regions.insert(regions.index(region) + 1, pad)
+                    region["count"] = size
             case "fork":
                 windows[job] = copy.deepcopy(window(row[3]))
             case "perms":

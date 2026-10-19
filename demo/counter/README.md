@@ -47,41 +47,43 @@ it. All four seats will hopefully (due to non-determinism) have the same output:
   t0    machine.inject job=1 segment=1 pipe=kernel principal=kernel ring=1 integrity=1 tokens=18 text=[18 items]
   t0    segment.opened job=1 segment=1 ring=1 integrity=1 perms=Perm.R|X|P
   t0    segment.closed job=1 segment=1 end=18
-  t0    mask.updated job=1 allowed_blocks=2
+  t0    mask.updated job=1 allowed_blocks=3
+  t1    machine.block_boundary job=1 block=1 padding_tokens=14
   t1    machine.decode job=1 segment=2 tokens=1 text=one
   t1      decoded "one"
-  t1    machine.block_boundary job=1 block=1
+  t1    machine.block_boundary job=1 block=2
   t1    vm.working_set job=1 size_tokens=19 segments=2
-  t1    mask.updated job=1 allowed_blocks=2
-  t2    machine.decode job=1 segment=3 tokens=1 text=two
+  t1    mask.updated job=1 allowed_blocks=3
+  t2    machine.decode job=1 segment=2 tokens=1 text=two
   t2      decoded "two"
-  t3    machine.decode job=1 segment=3 tokens=1 text=three
+  t3    machine.decode job=1 segment=2 tokens=1 text=three
   t3      decoded "three"
-  t4    machine.decode job=1 segment=3 tokens=1 text=four
+  t4    machine.decode job=1 segment=2 tokens=1 text=four
   t4      decoded "four"
-  t5    machine.decode job=1 segment=3 tokens=1 text=five
+  t5    machine.decode job=1 segment=2 tokens=1 text=five
   t5      decoded "five"
   t6    job.spawned job=3 descriptor=counter1 priority=100 parent=1 owner=kernel integrity=2
   t7    job.state job=1 from_state=running to_state=done
   t7    job.completed job=1 tokens_used=5
   t8    job.state job=2 from_state=ready to_state=running
   t8    job.dispatched job=2 priority=100
-  t8    machine.inject job=2 segment=4 pipe=kernel principal=kernel ring=1 integrity=1 tokens=18 text=[18 items]
-  t8    segment.opened job=2 segment=4 ring=1 integrity=1 perms=Perm.R|X|P
-  t8    segment.closed job=2 segment=4 end=18
-  t8    mask.updated job=2 allowed_blocks=2
-  t9    machine.decode job=2 segment=5 tokens=1 text=one
+  t8    machine.inject job=2 segment=3 pipe=kernel principal=kernel ring=1 integrity=1 tokens=18 text=[18 items]
+  t8    segment.opened job=2 segment=3 ring=1 integrity=1 perms=Perm.R|X|P
+  t8    segment.closed job=2 segment=3 end=18
+  t8    mask.updated job=2 allowed_blocks=3
+  t9    machine.block_boundary job=2 block=1 padding_tokens=14
+  t9    machine.decode job=2 segment=4 tokens=1 text=one
   t9      decoded "one"
-  t9    machine.block_boundary job=2 block=1
+  t9    machine.block_boundary job=2 block=2
   t9    vm.working_set job=2 size_tokens=19 segments=2
-  t9    mask.updated job=2 allowed_blocks=2
-  t10   machine.decode job=2 segment=6 tokens=1 text=two
+  t9    mask.updated job=2 allowed_blocks=3
+  t10   machine.decode job=2 segment=4 tokens=1 text=two
   t10     decoded "two"
-  t11   machine.decode job=2 segment=6 tokens=1 text=three
+  t11   machine.decode job=2 segment=4 tokens=1 text=three
   t11     decoded "three"
-  t12   machine.decode job=2 segment=6 tokens=1 text=four
+  t12   machine.decode job=2 segment=4 tokens=1 text=four
   t12     decoded "four"
-  t13   machine.decode job=2 segment=6 tokens=1 text=five
+  t13   machine.decode job=2 segment=4 tokens=1 text=five
   t13     decoded "five"
   t14   job.spawned job=4 descriptor=counter2 priority=100 parent=2 owner=kernel integrity=2
   t15   job.state job=2 from_state=running to_state=done

@@ -44,6 +44,7 @@
   var CONTEXT = {
     inject: "arrived",
     decode: "generated",
+    edge: "crossed a block edge",
     pad: "padded to a block boundary",
     splice: "spliced",
     stub: "evicted to a stub",
@@ -378,10 +379,29 @@
         break;
       case "decode":
         region = regionOf(win, row[3]);
-        if (!region) { region = blankRegion("output", row[3], 0); win.regions.push(region); }
+        if (!region) {
+          var open = win.regions[win.regions.length - 1];
+          if (open && open.kind === "output" && open.segment === null) {
+            region = open; region.segment = row[3];
+          } else {
+            region = blankRegion("output", row[3], 0); win.regions.push(region);
+          }
+        }
         region.text = region.text.concat(row[4]);
         region.count += row[4].length;
         win.tokens += row[4].length;
+        break;
+      case "edge":
+        var last = win.regions[win.regions.length - 1];
+        var start = win.tokens - (last ? last.count : 0);
+        if (last && last.kind === "output" && start < row[3] && row[3] < win.tokens) {
+          var keep = row[3] - start;
+          region = blankRegion("output", null, last.count - keep);
+          region.text = last.text.slice(keep);
+          last.text = last.text.slice(0, keep);
+          last.count = keep;
+          win.regions.push(region);
+        }
         break;
       case "pad":
         region = blankRegion("pad", null, row[3]);
@@ -391,19 +411,26 @@
       case "splice":
         region = regionOf(win, row[3]);
         index = win.regions.indexOf(region);
-        win.tokens -= region.count;
+        var removed = 0;
+        while (removed < row[6]) removed += win.regions.splice(index, 1)[0].count;
+        if (removed !== row[6]) throw new Error("splice of " + row[6] + " tokens cut a region");
+        win.tokens -= removed;
         if (row[5]) {
           region = blankRegion("stub", row[4], row[5]);
-          win.regions[index] = region;
+          win.regions.splice(index, 0, region);
           win.tokens += row[5];
         } else {
-          win.regions.splice(index, 1);
           region = null;
         }
         break;
       case "stub":
         region = regionOf(win, row[3]);
         region.stub_of = row[4]; region.store = row[5];
+        if (region.count > row[6]) {
+          var pad = blankRegion("pad", null, region.count - row[6]);
+          win.regions.splice(win.regions.indexOf(region) + 1, 0, pad);
+          region.count = row[6];
+        }
         break;
       case "fork":
         windows[job] = JSON.parse(JSON.stringify(windowOf(windows, row[3])));

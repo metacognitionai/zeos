@@ -300,6 +300,11 @@ Protocol on resume:
 1. Kernel computes `dirty = read_set(job) ∩ writes(everything that ran above it)`:
    the job's declared ∪ observed read-set, against the writes actually recorded
    in world state while it was away.
+   A job's own writes are not news to it and are left out. That includes a
+   device's report of what a job's command did -- a body saying where it stopped
+   after the job told it to move -- when the device attributes the report to
+   that job (`Kernel.deliver(..., on_behalf_of=job)`); the same report is news
+   to every other job.
 2. `dirty = ∅` → resume silently. The job's beliefs are exactly as it left
    them, so it is told nothing; the journal still records the resume and its
    duration. A notice whose whole content is "nothing changed" is not

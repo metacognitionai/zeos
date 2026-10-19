@@ -111,6 +111,7 @@ from zeos.core.events import (
     PriorityRestored,
     Refaulted,
     ReplicaRefreshed,
+    ReportAttributed,
     ResidencyChanged,
     ResourceAcquired,
     ResourceBlocked,
@@ -181,6 +182,7 @@ from zeos.core.residency import (
     EvictionCandidate,
     ThrashMonitor,
     admission_check,
+    padded_to_block,
     plan_eviction,
     render_stub,
     stub_size,
@@ -202,6 +204,7 @@ from zeos.core.topology import LINK_STATE, LinkPort, Topology
 from zeos.core.vectors import VectorAction, VectorTable
 from zeos.descriptor.schema import CompartmentSpec, Descriptor
 from zeos.machine.base import (
+    PAD_TOKEN,
     AttentionHint,
     DecodeResult,
     MachineBackend,
@@ -382,8 +385,14 @@ class Kernel:
                 file=sys.stderr,
             )
 
-    def _transition(self, job: Job, to: JobState) -> None:
-        before = job.state
+    def _transition(self, job: Job, to: JobState, *, was: JobState | None = None) -> None:
+        """Move a job to ``to`` and journal it.
+
+        ``was`` is for a caller whose scheduler call has already set the new state --
+        ``block``, ``wake`` and ``preempt`` all do -- so the job's own state no longer
+        says where it came from, and without it the move would go unrecorded.
+        """
+        before = job.state if was is None else was
         if before is to:
             return
         job.state = to
@@ -624,6 +633,7 @@ class Kernel:
         child.current_integrity = spec.integrity
         child.compartment_of = parent.job_id
 
+        self._close_and_pad(parent)
         shared = self.machine.fork(parent.job_id, child.job_id)
         parent.segments.fork_into(child.segments)
         granted = tuple(record.id for tag in spec.grants for record in child.segments.by_tag(tag))
@@ -671,6 +681,7 @@ class Kernel:
         text: str,
         *,
         principal: Principal | None = None,
+        on_behalf_of: JobId | None = None,
     ) -> None:
         """A device adapter writes to a pipe. This is how the world reaches the kernel.
 
@@ -678,7 +689,17 @@ class Kernel:
         token, is journalled as backpressure, and raises ``PipeFull`` so the driver
         can retry, coalesce or drop knowingly. The kernel holds nothing on a device's
         behalf, because a device, unlike a blocked job, does not stop producing.
+
+        ``on_behalf_of`` is for a device reporting the outcome of a job's own command
+        on an actuator -- a body saying where it ended up after the job told it to
+        move. The world write is attributed to that job, so its resume diff leaves
+        out what it did itself (core §6.1) and every other job's diff reports it.
+        Provenance is unchanged: the report still enters at the pipe's ring.
         """
+        if on_behalf_of is not None:
+            self._check_attribution(pipe_name, on_behalf_of)
+            self._deliver_now(pipe_name, text, caused_by=on_behalf_of)
+            return
         if self.pipes.has(pipe_name):
             spec = self.pipes.get(pipe_name).spec
             if spec.utterance_source is not None:
@@ -731,7 +752,26 @@ class Kernel:
         self._wake_writers(pipe)
         return tokens
 
-    def _deliver_now(self, pipe_name: PipeName, text: str, *, refuse: bool = True) -> None:
+    def _check_attribution(self, pipe_name: PipeName, job_id: JobId) -> None:
+        """Attribution is a claim about an effect, so it needs one: an actuator that
+        is reached directly, and a job the kernel knows."""
+        if not self.pipes.has(pipe_name) or not self.pipes.get(pipe_name).spec.world_object:
+            raise KernelError(
+                f"a report can be attributed only on an actuator, and {pipe_name} is not one"
+            )
+        if self.gates.for_pipe(pipe_name) is not None:
+            raise KernelError(f"{pipe_name} is gated; a report cannot bypass its guard")
+        if not self.sched.has(job_id):
+            raise KernelError(f"a report on {pipe_name} is attributed to unknown job {job_id}")
+
+    def _deliver_now(
+        self,
+        pipe_name: PipeName,
+        text: str,
+        *,
+        refuse: bool = True,
+        caused_by: JobId | None = None,
+    ) -> None:
         pipe = self.pipes.ensure(pipe_name)
         tokens = tokens_from_text(text)
         latched = bool(pipe.spec.world_object)
@@ -752,8 +792,12 @@ class Kernel:
                     f"a delivery of {len(tokens)} does not fit"
                 )
             return
+        # Only a report that lands is attributed, so a refused one journals nothing
+        # but its backpressure.
+        if caused_by is not None:
+            self._emit(ReportAttributed(clock=self.clock, pipe=pipe.name, job=caused_by))
         self._put(pipe, tokens, pipe.spec.floor, by=None)
-        self._settle_write(pipe, text, pipe.spec.floor, by=None)
+        self._settle_write(pipe, text, pipe.spec.floor, by=caused_by)
 
     def _guard_delivery(self, gate: GateSpec, text: str) -> None:
         requests = self.pipes.ensure(gate.requests)
@@ -887,6 +931,7 @@ class Kernel:
         if suspended is not None and (ready is None or not ready.outranks(suspended)):
             resumed = self.sched.pop_suspended()
             if resumed is not None:
+                self._transition(resumed, JobState.READY, was=JobState.SUSPENDED)
                 self._dispatch(resumed)
                 return
         if ready is not None:
@@ -1012,6 +1057,9 @@ class Kernel:
         cannot accidentally mask part of its neighbour.
         """
         job.segments.close_open(integrity=job.current_integrity)
+        self._pad_to_block(job)
+
+    def _pad_to_block(self, job: Job) -> None:
         padding = self.machine.pad_to_block(job.job_id)
         if padding:
             self.clock = self.clock.tick_tokens(padding)
@@ -1026,6 +1074,14 @@ class Kernel:
 
     def _current_block(self, job: Job) -> int:
         return self.machine.stats(job.job_id).resident_tokens // self.machine.block_size
+
+    def _next_block(self, job: Job) -> int:
+        """The block the job's next token lands in: the current one while output is
+        open, else the edge ``_ensure_output_segment`` pads up to."""
+        resident = self.machine.stats(job.job_id).resident_tokens
+        if job.segments.open_segment is not None:
+            return resident // self.machine.block_size
+        return padded_to_block(resident, self.machine.block_size) // self.machine.block_size
 
     def _inject(
         self,
@@ -1216,6 +1272,7 @@ class Kernel:
         """
         if job.segments.open_segment is not None:
             return
+        self._pad_to_block(job)
         job.segments.open_output(
             self._next_segment(),
             at=self.machine.stats(job.job_id).resident_tokens,
@@ -1367,14 +1424,22 @@ class Kernel:
                         theta_read=self.config.theta_read,
                     ),
                 )
-        # Close the output segment at the boundary. The kernel closes output
-        # at *every* scheduling boundary event -- any INJECT, any returning pipe read,
-        # any preemption, and any block-boundary refresh. Omitting the last case
-        # leaves a job that only ever generates with a single unbounded OPEN
-        # segment, which is both wrong for provenance ("generated between which
-        # events?") and fatal for eviction, since an open segment is never a
-        # candidate.
-        job.segments.close_open(integrity=job.current_integrity)
+        # Split the open output at the edge this step crossed, so the tokens before
+        # it close as one record and the rest continue in a new one, or close it
+        # there when the step ended on the edge; output that opened on the edge is
+        # left open.
+        edge = block * self.machine.block_size
+        open_segment = job.segments.open_segment
+        if open_segment is not None and open_segment.start < edge:
+            if open_segment.end == edge:
+                job.segments.close_open(integrity=job.current_integrity)
+            else:
+                job.segments.split_open(
+                    edge,
+                    self._next_segment(),
+                    integrity=job.current_integrity,
+                    token_clock=self.clock.token_clock,
+                )
 
         job.thrash.note_block()
         self._sample_working_set(job)
@@ -1382,8 +1447,13 @@ class Kernel:
         self._refresh_mask(job)
 
     def _refresh_mask(self, job: Job) -> None:
-        """Install the allowed-block bitmap -- the MMU."""
-        allowed = job.segments.allowed_blocks()
+        """Install the allowed-block bitmap -- the MMU.
+
+        The block the job writes next is allowed along with the readable records: no
+        record covers it until the first token lands, and the mask is not refreshed
+        again until the next boundary.
+        """
+        allowed = job.segments.allowed_blocks() | {self._next_block(job)}
         self.machine.set_mask(job.job_id, allowed)
         denied = job.segments.denied_blocks()
         self._emit(
@@ -1636,9 +1706,10 @@ class Kernel:
         # ``self.*`` is what a re-embodiment diff is made of, so it has to
         # exist and be written by the kernel on every embodiment change.
         previous = {k: self.world.get(ObjectName(k)) for k in self_state(profile)}
+        changed_body = previous.get("self.platform") != profile.name
         for key, value in sorted(self_state(profile).items()):
             note = ""
-            if previous.get(key) and previous[key] == value and key == "self.tooling":
+            if changed_body and previous.get(key) == value and key == "self.tooling":
                 # Nominally the same tooling on a different body is exactly the case
                 # a value cannot express: same gripper, different offsets.
                 note = "recalibrated on a new body; offsets differ"
@@ -1693,7 +1764,7 @@ class Kernel:
         if job.state is JobState.RUNNING:
             self.sched.preempt(job)
             job.suspended_at = self.clock
-            self._transition(job, JobState.SUSPENDED)
+            self._transition(job, JobState.SUSPENDED, was=JobState.RUNNING)
         elif job.state is JobState.READY:
             job.suspended_at = self.clock
 
@@ -1741,7 +1812,7 @@ class Kernel:
                     # stopped waiting on it -- and went on outranking that job's peers
                     # on the strength of it.
                     self._release_priority_inheritance(waiter)
-                    self._transition(waiter, JobState.READY)
+                    self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
 
     def withdraw_platform(self, platform: str, *, reason: str) -> Job | None:
         """A body leaves the fleet -- flat battery, fault, or maintenance.
@@ -1772,7 +1843,7 @@ class Kernel:
             waiter = self.sched.get(waiter_id)
             waiter.pending_acquire = None
             if self.sched.wake(waiter):
-                self._transition(waiter, JobState.READY)
+                self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
         return holder
 
     # -- natural language (ZEOS-NLI) ------------------------------------------
@@ -2308,7 +2379,7 @@ class Kernel:
                 if job.state is JobState.RUNNING:
                     self.sched.preempt(job)
                     job.suspended_at = self.clock
-                    self._transition(job, JobState.SUSPENDED)
+                    self._transition(job, JobState.SUSPENDED, was=JobState.RUNNING)
 
     # -- resources -----------------------------------------------------------
 
@@ -2410,7 +2481,7 @@ class Kernel:
         job.pending_acquire = name
         self._block(job)
         job.blocked_reason = "resource"
-        self._transition(job, JobState.BLOCKED)
+        self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
         self._emit(
             ResourceBlocked(
                 clock=self.clock,
@@ -2439,7 +2510,7 @@ class Kernel:
             resource.drop_waiter(candidate)
             if self.sched.wake(waiter):
                 woken = candidate
-                self._transition(waiter, JobState.READY)
+                self._transition(waiter, JobState.READY, was=JobState.BLOCKED)
         self._emit(ResourceReleased(clock=self.clock, job=job.job_id, resource=name, woke=woken))
 
     def _return_body(self, job: Job, *, reason: str) -> None:
@@ -2870,7 +2941,7 @@ class Kernel:
             self._block(job)
             job.blocked_on = gate.pipe
             job.blocked_reason = "gate-queue"
-            self._transition(job, JobState.BLOCKED)
+            self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
             self._emit(
                 JobBlocked(
                     clock=self.clock, job=job.job_id, pipe=gate.requests, reason="gate-queue"
@@ -2892,7 +2963,7 @@ class Kernel:
         self._block(job)
         job.blocked_on = gate.pipe
         job.blocked_reason = "gate"
-        self._transition(job, JobState.BLOCKED)
+        self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
         self._emit(
             GateConsulted(
                 clock=self.clock,
@@ -3028,7 +3099,7 @@ class Kernel:
         if not allowed:
             job.pending_write = None
             if self.sched.wake(job):
-                self._transition(job, JobState.READY)
+                self._transition(job, JobState.READY, was=JobState.BLOCKED)
             self._raise_fault(
                 job,
                 Fault(
@@ -3045,7 +3116,7 @@ class Kernel:
         # Allowed: the held write is retried through the ordinary path on wake.
         job.gate_cleared = gate.pipe
         if self.sched.wake(job):
-            self._transition(job, JobState.READY)
+            self._transition(job, JobState.READY, was=JobState.BLOCKED)
         self._emit(JobWoken(clock=self.clock, job=job.job_id, pipe=gate.pipe))
 
     def _do_select(self, job: Job, pipe_names: tuple[PipeName, ...]) -> None:
@@ -3081,7 +3152,7 @@ class Kernel:
             if not pipe.writable(len(tokens)):
                 pipe.block_writer(job.job_id)
                 self._block(job)
-                self._transition(job, JobState.BLOCKED)
+                self._transition(job, JobState.BLOCKED, was=JobState.RUNNING)
                 return True
             job.pending_write = None
             self._do_write(job, pipe_name, tokens, then_read=then_read)
@@ -3210,13 +3281,18 @@ class Kernel:
         summary = summarise(tokens, budget=summary_budget)
         stub_text = render_stub(record, summary, store_id=span.store_id)
         stub_tokens = tokens_from_text(stub_text, TokenKind.CONTROL)
+        padded = padded_to_block(len(stub_tokens), self.machine.block_size)
+        replacement = (*stub_tokens, *([PAD_TOKEN] * (padded - len(stub_tokens))))
 
-        splice = self.machine.splice(job.job_id, record.start, record.end, stub_tokens)
+        extent_end = job.segments.extent_end(record.id)
+        extent = extent_end - record.start
+        splice = self.machine.splice(job.job_id, record.start, extent_end, replacement)
         stub_id = self._next_segment()
         job.segments.evict_to_stub(
             record.id,
             stub_id,
             stub_tokens=len(stub_tokens),
+            padded_tokens=padded,
             token_clock=self.clock.token_clock,
         )
         self._emit(
@@ -3226,7 +3302,7 @@ class Kernel:
                 start_segment=record.id,
                 end_segment=stub_id,
                 tokens_in=splice.tokens_in,
-                tokens_out=record.tokens,
+                tokens_out=extent,
                 invalidated_downstream_tokens=splice.invalidated_downstream,
             )
         )
@@ -3237,7 +3313,7 @@ class Kernel:
                 segment=record.id,
                 stub=stub_id,
                 store=span.store_id,
-                freed_tokens=record.tokens - len(stub_tokens),
+                freed_tokens=extent - padded,
                 stub_tokens=len(stub_tokens),
                 policy=job.descriptor.context.eviction.value,
             )
@@ -3257,7 +3333,7 @@ class Kernel:
                 store_id=span.store_id,
                 stub=stub_id,
                 evicted_at_block=job.last_block,
-                freed_tokens=record.tokens - len(stub_tokens),
+                freed_tokens=extent - padded,
                 stub_tokens=len(stub_tokens),
                 owner=job.job_id,
             )
@@ -3466,7 +3542,8 @@ class Kernel:
             # Measured before any padding: ``_inject`` pads to a block boundary, and
             # padding lands *after* this region, so closing first would manufacture
             # the very downstream extent being weighed.
-            downstream = self.machine.stats(job.job_id).resident_tokens - record.end
+            extent_end = job.segments.extent_end(record.id)
+            downstream = self.machine.stats(job.job_id).resident_tokens - extent_end
             budget = job.descriptor.context.retract_recompute_ratio * record.tokens
             if record.is_closed and downstream <= budget:
                 self._retract_status_region(job, record, obj)
@@ -3485,7 +3562,8 @@ class Kernel:
                 )
 
     def _retract_status_region(self, job: Job, record: SegmentRecord, obj: ObjectName) -> None:
-        splice = self.machine.splice(job.job_id, record.start, record.end, ())
+        extent_end = job.segments.extent_end(record.id)
+        splice = self.machine.splice(job.job_id, record.start, extent_end, ())
         freed = job.segments.retract(record.id)
         self._emit(
             Spliced(

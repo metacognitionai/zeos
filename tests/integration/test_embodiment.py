@@ -447,6 +447,22 @@ def test_nominally_identical_tooling_still_reports_a_note() -> None:
     assert resumed[0].resume_kind is ResumeKind.DIRTY
 
 
+def test_the_same_body_again_needs_no_recalibration() -> None:
+    """The recalibration note is about a different machine with the same tooling
+    bolted on. Getting the same body back changes no offsets, so it is no news."""
+    kernel, events = build([CARRY], {"carry-beam": WORK}, platforms=(CARRIER_7,))
+    job = kernel.spawn(DescriptorName("carry-beam"))
+    kernel.tick()
+    kernel.tick()
+    kernel.revoke_lease("carrier-7", reason="reallocated")
+    kernel.run_until_quiescent()
+
+    back = [e for e in of(events, Embodied) if e.job == job.job_id]
+    assert [e.platform for e in back] == ["carrier-7", "carrier-7"]
+    resumed = [r for r in of(events, JobResumed) if r.job == job.job_id]
+    assert resumed and resumed[0].resume_kind is ResumeKind.CLEAN
+
+
 def test_withdrawal_is_not_revocation() -> None:
     """The distinction F0 turned out to need.
 

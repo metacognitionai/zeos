@@ -43,6 +43,7 @@ from zeos.core.ids import JobId, PipeName, SegmentId, TokenKind
 
 __all__ = [
     "Token",
+    "PAD_TOKEN",
     "OpKind",
     "NAMES_A_TARGET",
     "MachineRequest",
@@ -89,6 +90,11 @@ class Token:
 
     def __str__(self) -> str:
         return self.text
+
+
+#: Reserved no-op token used for block padding; the kernel splices it in after a stub
+#: to fill the stub's last block.
+PAD_TOKEN = Token("<pad>", TokenKind.CONTROL)
 
 
 def tokens_from_text(text: str, kind: TokenKind = TokenKind.NORMAL) -> tuple[Token, ...]:
@@ -297,7 +303,11 @@ class MachineBackend(Protocol):
         ...
 
     def splice(self, job: JobId, start: int, end: int, tokens: Sequence[Token]) -> SpliceResult:
-        """Replace ``[start, end)`` with ``tokens``. Only at segment boundaries."""
+        """Replace ``[start, end)`` with ``tokens``. Only at segment boundaries.
+
+        ``tokens`` may end in ``PAD_TOKEN``s, which the backend lays down as the same
+        no-op padding ``pad_to_block`` uses, never as text.
+        """
         ...
 
     # -- the serving-stack contract --------------------------

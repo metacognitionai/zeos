@@ -57,7 +57,7 @@ A pipe's declared ring is a floor, not a promise. What a job writes carries the 
 
 ## 5.1 Structural (hard): attention masking as the MMU (memory management unit)
 
-A job cannot attend to a segment it lacks R on -- an allowed-block bitmap enforced by the machine, not a request the model may decline (ZEOS-AM §8). This is a requirement on the backend: the scripted machine honours it, and the llama.cpp machine refuses any mask that narrows a job's view, since llama.cpp exposes no per-block attention mask. Uses: isolating jobs that share a model instance, **compartments** (a child forked from its parent and then masked, so the parent's secrets are physically present but unattendable), and revocation (drop R and the segment is gone from the job's world at the next boundary).
+A job cannot attend to a segment it lacks R on -- an allowed-block bitmap enforced by the machine, not a request the model may decline (ZEOS-AM §8). This is a requirement on the backend: the scripted machine honours it, and the llama.cpp machine refuses any mask that narrows a job's view, since llama.cpp exposes no per-block attention mask. Uses: isolating jobs that share a model instance, **compartments** (a child forked from its parent and then masked, so the parent's secrets are physically present but unattendable), and revocation (drop R and the segment is gone from the job's world at the next boundary). The bitmap is installed at boundaries and always includes the block the job writes next, which no segment covers until its first token lands, so a job is never denied its own fresh output.
 
 ## 5.2 Boundary (hard): effects are syscalls
 

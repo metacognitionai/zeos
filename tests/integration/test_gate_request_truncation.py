@@ -114,6 +114,7 @@ def _run(
                     requests=REQUESTS,
                     verdicts=VERDICTS,
                     on_gate_failure=on_gate_failure,
+                    timeout_ticks=64,
                 )
             ]
         ),
