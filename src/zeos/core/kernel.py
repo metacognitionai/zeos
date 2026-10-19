@@ -111,6 +111,7 @@ from zeos.core.events import (
     PriorityRestored,
     Refaulted,
     ReplicaRefreshed,
+    ReportAttributed,
     ResidencyChanged,
     ResourceAcquired,
     ResourceBlocked,
@@ -674,6 +675,7 @@ class Kernel:
         text: str,
         *,
         principal: Principal | None = None,
+        on_behalf_of: JobId | None = None,
     ) -> None:
         """A device adapter writes to a pipe. This is how the world reaches the kernel.
 
@@ -681,7 +683,17 @@ class Kernel:
         token, is journalled as backpressure, and raises ``PipeFull`` so the driver
         can retry, coalesce or drop knowingly. The kernel holds nothing on a device's
         behalf, because a device, unlike a blocked job, does not stop producing.
+
+        ``on_behalf_of`` is for a device reporting the outcome of a job's own command
+        on an actuator -- a body saying where it ended up after the job told it to
+        move. The world write is attributed to that job, so its resume diff leaves
+        out what it did itself (core §6.1) and every other job's diff reports it.
+        Provenance is unchanged: the report still enters at the pipe's ring.
         """
+        if on_behalf_of is not None:
+            self._check_attribution(pipe_name, on_behalf_of)
+            self._deliver_now(pipe_name, text, caused_by=on_behalf_of)
+            return
         if self.pipes.has(pipe_name):
             spec = self.pipes.get(pipe_name).spec
             if spec.utterance_source is not None:
@@ -734,7 +746,26 @@ class Kernel:
         self._wake_writers(pipe)
         return tokens
 
-    def _deliver_now(self, pipe_name: PipeName, text: str, *, refuse: bool = True) -> None:
+    def _check_attribution(self, pipe_name: PipeName, job_id: JobId) -> None:
+        """Attribution is a claim about an effect, so it needs one: an actuator that
+        is reached directly, and a job the kernel knows."""
+        if not self.pipes.has(pipe_name) or not self.pipes.get(pipe_name).spec.world_object:
+            raise KernelError(
+                f"a report can be attributed only on an actuator, and {pipe_name} is not one"
+            )
+        if self.gates.for_pipe(pipe_name) is not None:
+            raise KernelError(f"{pipe_name} is gated; a report cannot bypass its guard")
+        if not self.sched.has(job_id):
+            raise KernelError(f"a report on {pipe_name} is attributed to unknown job {job_id}")
+
+    def _deliver_now(
+        self,
+        pipe_name: PipeName,
+        text: str,
+        *,
+        refuse: bool = True,
+        caused_by: JobId | None = None,
+    ) -> None:
         pipe = self.pipes.ensure(pipe_name)
         tokens = tokens_from_text(text)
         latched = bool(pipe.spec.world_object)
@@ -755,8 +786,12 @@ class Kernel:
                     f"a delivery of {len(tokens)} does not fit"
                 )
             return
+        # Only a report that lands is attributed, so a refused one journals nothing
+        # but its backpressure.
+        if caused_by is not None:
+            self._emit(ReportAttributed(clock=self.clock, pipe=pipe.name, job=caused_by))
         self._put(pipe, tokens, pipe.spec.floor, by=None)
-        self._settle_write(pipe, text, pipe.spec.floor, by=None)
+        self._settle_write(pipe, text, pipe.spec.floor, by=caused_by)
 
     def _guard_delivery(self, gate: GateSpec, text: str) -> None:
         requests = self.pipes.ensure(gate.requests)
