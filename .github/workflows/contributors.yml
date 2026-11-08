@@ -1,0 +1,41 @@
+name: contributors
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions: {}
+
+concurrency:
+  group: contributors-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  allow-list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Close the pull request unless its author is inside the organisation or on the list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          ALLOWED: ${{ secrets.ALLOWED_CONTRIBUTORS }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$ASSOCIATION" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "$AUTHOR is $ASSOCIATION of the repository"
+              exit 0 ;;
+          esac
+          if printf '%s\n' "$ALLOWED" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+              | grep -vE '^(#|$)' | grep -qixF -- "$AUTHOR"; then
+            echo "$AUTHOR is on the allow list"
+            exit 0
+          fi
+          gh pr close "$NUMBER" --repo "$REPO" --comment "Closing: pull requests to ZEOS are accepted from contributors who have signed the Contributor License Agreement and are on the allow list. CONTRIBUTING.md says how. Once you are on the list, reopen this pull request or open a new one."
+          echo "closed #$NUMBER: $AUTHOR is not on the allow list"
