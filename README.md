@@ -80,6 +80,11 @@ there.
 
 Additional demonstration applications built on ZEOS can be found in our [zeos-demos repository](https://github.com/metacognitionai/zeos-demos).
 
+## Contributing
+
+Pull requests are welcome. [`CONTRIBUTING.md`](https://github.com/metacognitionai/zeos/blob/main/CONTRIBUTING.md)
+says how to set up, what we accept, what a pull request needs, and the contribution terms.
+
 ## Citing ZEOS
 
 If you use ZEOS in your research, please cite it (see also [`CITATION.cff`](https://github.com/metacognitionai/zeos/blob/main/CITATION.cff)):
