@@ -3,11 +3,17 @@ name: contributors
 on:
   pull_request_target:
     types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      login:
+        description: A GitHub login to check. The verdict is printed and nothing is closed.
+        required: true
+        type: string
 
 permissions: {}
 
 concurrency:
-  group: contributors-${{ github.event.pull_request.number }}
+  group: contributors-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -20,7 +26,7 @@ jobs:
       - name: Close the pull request unless its author is inside the organisation or on the list
         env:
           GH_TOKEN: ${{ github.token }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR: ${{ github.event.pull_request.user.login || inputs.login }}
           ASSOCIATION: ${{ github.event.pull_request.author_association }}
           ALLOWED: ${{ secrets.ALLOWED_CONTRIBUTORS }}
           NUMBER: ${{ github.event.pull_request.number }}
@@ -32,9 +38,27 @@ jobs:
               echo "$AUTHOR is $ASSOCIATION of the repository"
               exit 0 ;;
           esac
+          status=$(curl -gsS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$REPO/collaborators/$AUTHOR" || true)
+          case "$status" in
+            204)
+              echo "$AUTHOR is a collaborator of the repository"
+              exit 0 ;;
+            404) ;;
+            *)
+              echo "::error::the collaborator check for $AUTHOR answered HTTP $status; nothing closed"
+              exit 1 ;;
+          esac
           if printf '%s\n' "$ALLOWED" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
               | grep -vE '^(#|$)' | grep -qixF -- "$AUTHOR"; then
             echo "$AUTHOR is on the allow list"
+            exit 0
+          fi
+          if [ -z "$NUMBER" ]; then
+            echo "$AUTHOR is neither a collaborator nor on the allow list; a pull request would be closed"
             exit 0
           fi
           gh pr close "$NUMBER" --repo "$REPO" --comment "Closing: pull requests to ZEOS are accepted from contributors who have signed the Contributor License Agreement and are on the allow list. CONTRIBUTING.md says how. Once you are on the list, reopen this pull request or open a new one."
