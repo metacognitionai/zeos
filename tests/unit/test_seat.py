@@ -236,6 +236,14 @@ def test_a_seat_knows_no_words_but_its_own() -> None:
     assert seat.lines(JOB) == ("write stdout hello;",)
 
 
+def test_a_seat_reports_a_reaped_job_to_its_callback() -> None:
+    reaped: list[JobId] = []
+    seat = CommandSeat(source=Tape([]), on_reap=reaped.append)
+    seat.create_context(JOB, "d")
+    seat.destroy_context(JOB)
+    assert reaped == [JOB]
+
+
 # -- the tape ---------------------------------------------------------------
 
 
@@ -298,6 +306,21 @@ def test_the_seat_run_is_the_same_run_twice() -> None:
     assert [to_line(i, e) for i, e in enumerate(first)] == [
         to_line(i, e) for i, e in enumerate(again)
     ]
+
+
+def test_the_drivers_reap_reaches_the_seats_callback_once_per_job() -> None:
+    bundle = load_case(FIXTURE)
+    reaped: list[JobId] = []
+    kernel, transport = build_kernel(
+        bundle,
+        machine=CommandSeat(source=TapeSource(bundle.scripts), on_reap=reaped.append),
+        journal_sink=[],
+    )
+    driver = Driver(kernel, transport=transport)
+    driver.boot(bundle.boot)
+    driver.run()
+    assert reaped == [job.job_id for job in kernel.sched.jobs()]
+    assert not kernel.unreaped()
 
 
 def test_the_cli_runs_a_case_through_the_seat(tmp_path: Path) -> None:
