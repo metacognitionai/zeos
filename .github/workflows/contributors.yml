@@ -17,16 +17,21 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Close the pull request unless its author is inside the organisation or on the list
+      - name: Close the pull request unless it comes from inside the organisation or its author is on the list
         env:
           GH_TOKEN: ${{ github.token }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           ALLOWED: ${{ secrets.ALLOWED_CONTRIBUTORS }}
           NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ "$HEAD_REPO" = "$REPO" ]; then
+            echo "$AUTHOR opened #$NUMBER from a branch of the repository"
+            exit 0
+          fi
           case "$ASSOCIATION" in
             OWNER|MEMBER|COLLABORATOR)
               echo "$AUTHOR is $ASSOCIATION of the repository"

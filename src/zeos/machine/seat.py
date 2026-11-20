@@ -222,10 +222,12 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
         block_size: int = 16,
         on_command: Callable[[JobId, str, MachineRequest], None] | None = None,
         on_arrival: Callable[[JobId, str], None] | None = None,
+        on_reap: Callable[[JobId], None] | None = None,
     ) -> None:
         ScriptedMachine.__init__(self, scripts=None, block_size=block_size)
         SyscallSeat.__init__(self, abi=abi, on_command=on_command, on_arrival=on_arrival)
         self._source = source
+        self._on_reap = on_reap
         self._state: dict[JobId, _State] = {}
 
     def create_context(self, job: JobId, descriptor: str = "") -> None:
@@ -235,6 +237,8 @@ class CommandSeat(ScriptedMachine, SyscallSeat):
     def destroy_context(self, job: JobId) -> None:
         super().destroy_context(job)
         self._state.pop(job, None)
+        if self._on_reap is not None:
+            self._on_reap(job)
 
     def _state_of(self, job: JobId) -> _State:
         state = self._state.get(job)
