@@ -680,7 +680,6 @@ class Kernel:
         pipe_name: PipeName,
         text: str,
         *,
-        principal: Principal | None = None,
         on_behalf_of: JobId | None = None,
     ) -> None:
         """A device adapter writes to a pipe. This is how the world reaches the kernel.
@@ -710,7 +709,6 @@ class Kernel:
             self._guard_delivery(gate, text)
             return
         self._deliver_now(pipe_name, text)
-        _ = principal  # provenance is stamped at INJECT, from the pipe's binding
 
     def _hear(self, spec: PipeSpec, text: str) -> None:
         """Text on a front door is compiled, not landed.
